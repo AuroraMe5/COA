@@ -59,7 +59,7 @@
         </div>
       </PanelCard>
 
-      <PanelCard title="核算概览" subtitle="展示当前课程的整体核算结果和最近更新时间。">
+      <PanelCard title="核算概览" subtitle="展示当前课程的整体核算结果和最近生成时间。">
         <div class="grid-2">
           <StatCard label="课程整体达成度" :value="Number(record.overallAchievement || 0).toFixed(3)" tone="primary" />
           <StatCard label="最近生成时间" :value="record.generatedAt || '--'" tone="secondary" />

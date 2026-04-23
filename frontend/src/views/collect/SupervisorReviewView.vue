@@ -2,7 +2,7 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="数据采集"
-      description="将成绩、学生评价、教学反思与督导评价纳入同一数据采集闭环。当前页面用于查看督导评价结论，为分析与改进提供外部教学质量依据。"
+      description="将成绩、学生评价、教学反思与督导评价纳入同一数据采集闭环。当前页面用于查看督导评价结果，为分析与改进提供外部教学质量依据。"
       :tabs="collectModuleTabs"
     />
 

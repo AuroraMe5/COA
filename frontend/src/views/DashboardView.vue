@@ -18,7 +18,7 @@
     </div>
 
     <div class="grid-2">
-      <PanelCard title="待办事项" subtitle="建议优先处理当前未完成的数据导入与异常课程。">
+      <PanelCard title="待办事项" subtitle="建议优先处理当前未完成的数据导入、核算或建议确认任务。">
         <div v-if="dashboard.todos.length" class="detail-list">
           <button
             v-for="todo in dashboard.todos"
@@ -32,9 +32,9 @@
         </div>
         <EmptyState
           v-else
-          mark="空"
+          mark="待"
           title="当前没有待办事项"
-          description="本学期核心工作已经同步完成，可以直接查看分析结果或继续维护课程目标。"
+          description="本学期核心工作已同步完成，可以直接查看分析结果或继续维护课程目标。"
         />
       </PanelCard>
 

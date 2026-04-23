@@ -10,7 +10,7 @@
 defineProps({
   mark: {
     type: String,
-    default: '待'
+    default: '空'
   },
   title: {
     type: String,

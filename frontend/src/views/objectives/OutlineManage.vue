@@ -1,11 +1,10 @@
 <template>
   <div class="app-page page-stack">
-    <div class="page-title">
-      <div>
-        <h1>课程大纲管理</h1>
-        <p>维护课程大纲版本、课程简介、目标来源，并支持发布前检查与状态切换。</p>
-      </div>
-    </div>
+    <ModuleHeader
+      title="教学目标管理"
+      description="课程大纲是教学目标管理的起点，用于维护课程版本、课程简介和目标来源，并为后续目标配置提供基础。"
+      :tabs="objectiveManageTabs"
+    />
 
     <div class="filter-bar">
       <div class="filter-field">
@@ -29,7 +28,7 @@
     <div v-if="message.text" class="notice" :class="message.type">{{ message.text }}</div>
 
     <div class="grid-2">
-      <PanelCard title="大纲列表" subtitle="可查看当前课程在学期内的大纲版本与状态。">
+      <PanelCard title="大纲列表" subtitle="查看当前课程在所选学期内的大纲版本与状态。">
         <div v-if="!outlines.length">
           <EmptyState
             mark="纲"
@@ -107,8 +106,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { getOutlines, publishOutline, saveOutline } from '@/api'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],

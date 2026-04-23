@@ -2,7 +2,7 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="教学目标管理"
-      description="将教学目标录入、目标分解与权重配置、智能解析导入整合到同一个模块中，便于教师按照手工维护与智能辅助两条路径协同完成目标建设。"
+      description="将教学目标录入、目标分解与权重配置、智能解析导入整合到同一模块中，便于教师按手工维护与智能辅助两条路径协同完成目标建设。"
       :tabs="objectiveManageTabs"
     >
       <template #actions>

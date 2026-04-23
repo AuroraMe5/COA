@@ -73,7 +73,7 @@
       :subtitle="`任务编号：${task.taskId}，文件：${task.fileName || selectedFileName}`"
     >
       <div class="info-strip">
-        <div>当前状态：{{ task.status }}</div>
+        <div>当前状态：{{ taskStatusLabel(task.status) }}</div>
         <div>提取目标：{{ task.objExtractCount || 0 }}</div>
         <div>提取考核项：{{ task.assessExtractCount || 0 }}</div>
       </div>
@@ -94,7 +94,7 @@
           <div v-for="item in task.objectives" :key="item.id" class="draft-card">
             <div class="achievement-row">
               <strong>{{ item.objCodeSuggest }}</strong>
-              <StatusBadge :text="item.confidenceLevel" :tone="confidenceTone(item.confidenceLevel)" />
+              <StatusBadge :text="confidenceLabel(item.confidenceLevel)" :tone="confidenceTone(item.confidenceLevel)" />
             </div>
             <div class="form-field mt-12">
               <label>目标内容</label>
@@ -110,7 +110,7 @@
                 <select v-model="item.objTypeFinal" class="select-input" @change="saveDraft(item)">
                   <option :value="1">知识</option>
                   <option :value="2">能力</option>
-                  <option :value="3">素质</option>
+                  <option :value="3">素养</option>
                 </select>
               </div>
               <div class="form-field">
@@ -215,6 +215,19 @@ function confidenceTone(level) {
   if (level === 'HIGH') return 'success'
   if (level === 'MEDIUM') return 'warning'
   return 'danger'
+}
+
+function confidenceLabel(level) {
+  if (level === 'HIGH') return '高'
+  if (level === 'MEDIUM') return '中'
+  return '低'
+}
+
+function taskStatusLabel(status) {
+  if (status === 'PARSING') return '解析中'
+  if (status === 'DONE') return '待确认'
+  if (status === 'CONFIRMED') return '已完成'
+  return status || '--'
 }
 
 function handleFileChange(event) {

@@ -1,14 +1,14 @@
 <template>
   <div class="app-page page-stack">
-    <div class="page-title">
-      <div>
-        <h1>目标考核映射</h1>
-        <p>按目标维护各考核项的贡献权重矩阵，便于达成度核算直接使用。</p>
-      </div>
-      <div class="toolbar">
+    <ModuleHeader
+      title="教学目标管理"
+      description="维护目标与考核项之间的贡献权重矩阵，为达成度核算提供直接输入。"
+      :tabs="objectiveManageTabs"
+    >
+      <template #actions>
         <button class="btn btn-primary" @click="saveAll">保存映射矩阵</button>
-      </div>
-    </div>
+      </template>
+    </ModuleHeader>
 
     <div class="filter-bar">
       <div class="filter-field">
@@ -73,8 +73,10 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { getObjectiveMapping, saveObjectiveMapping } from '@/api'
+import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],

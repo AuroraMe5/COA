@@ -3,9 +3,9 @@
     <section class="auth-hero">
       <div>
         <div class="auth-badge">CO</div>
-        <h1 class="auth-title">高校课程教学目标达成统计与分析系统</h1>
+        <h1 class="auth-title">高校课程教学目标达成统计及分析系统</h1>
         <p class="auth-subtitle">
-          面向教师日常教学闭环，连接课程目标管理、数据采集、达成度核算、结果分析与改进跟踪。
+          面向教师日常教学闭环，贯通课程目标管理、数据采集、达成度核算、结果分析与教学改进。
         </p>
       </div>
 

@@ -622,3 +622,127 @@ Unconditional classes:
 2026-04-23T20:02:55.671+08:00 DEBUG 19916 --- [coa] [  restartedMain] o.s.boot.devtools.restart.Restarter      : Immediately restarting application
 2026-04-23T20:02:55.672+08:00 DEBUG 19916 --- [coa] [  restartedMain] o.s.boot.devtools.restart.Restarter      : Starting application com.example.coa.CoaApplication with URLs [file:/D:/COA/backend/coa/target/classes/]
 2026-04-23T20:02:55.673+08:00 DEBUG 19916 --- [coa] [  restartedMain] o.s.b.a.ApplicationAvailabilityBean      : Application availability state ReadinessState changed to ACCEPTING_TRAFFIC
+2026-04-23T20:03:28.211+08:00  INFO 19916 --- [coa] [nio-8081-exec-2] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-04-23T20:03:28.212+08:00  INFO 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-04-23T20:03:28.213+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Detected StandardServletMultipartResolver
+2026-04-23T20:03:28.214+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Detected AcceptHeaderLocaleResolver
+2026-04-23T20:03:28.215+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Detected org.springframework.web.servlet.view.DefaultRequestToViewNameTranslator@10a1d5f9
+2026-04-23T20:03:28.216+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Detected org.springframework.web.servlet.support.SessionFlashMapManager@47d97391
+2026-04-23T20:03:28.217+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : enableLoggingRequestDetails='false': request parameters and headers will be masked to prevent unsafe logging of potentially sensitive data
+2026-04-23T20:03:28.217+08:00  INFO 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Completed initialization in 4 ms
+2026-04-23T20:03:28.225+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.web.servlet.DispatcherServlet        : POST "/api/v1/auth/login", parameters={}
+2026-04-23T20:03:28.225+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : POST "/api/v1/auth/login", parameters={}
+2026-04-23T20:03:28.247+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] s.w.s.m.m.a.RequestMappingHandlerMapping : Mapped to com.example.coa.controller.AuthController#login(Map)
+2026-04-23T20:03:28.247+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] s.w.s.m.m.a.RequestMappingHandlerMapping : Mapped to com.example.coa.controller.AuthController#login(Map)
+2026-04-23T20:03:28.304+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] m.m.a.RequestResponseBodyMethodProcessor : Read "application/json;charset=UTF-8" to [{username=wangbin, password=wrong-password}]
+2026-04-23T20:03:28.304+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] m.m.a.RequestResponseBodyMethodProcessor : Read "application/json;charset=UTF-8" to [{username=wangbin, password=123456}]
+2026-04-23T20:03:28.318+08:00  INFO 19916 --- [coa] [nio-8081-exec-2] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-04-23T20:03:28.624+08:00  INFO 19916 --- [coa] [nio-8081-exec-2] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection com.mysql.cj.jdbc.ConnectionImpl@3b7968c3
+2026-04-23T20:03:28.626+08:00  INFO 19916 --- [coa] [nio-8081-exec-2] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-04-23T20:03:28.636+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-04-23T20:03:28.638+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT
+    u.id,
+    u.username,
+    u.password_hash,
+    u.real_name,
+    u.email,
+    u.phone,
+    u.college_id,
+    bc.college_name,
+    u.status
+FROM sys_user u
+LEFT JOIN base_college bc ON bc.id = u.college_id
+WHERE u.username = ?
+LIMIT 1
+]
+2026-04-23T20:03:28.648+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-04-23T20:03:28.649+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT
+    u.id,
+    u.username,
+    u.password_hash,
+    u.real_name,
+    u.email,
+    u.phone,
+    u.college_id,
+    bc.college_name,
+    u.status
+FROM sys_user u
+LEFT JOIN base_college bc ON bc.id = u.college_id
+WHERE u.username = ?
+LIMIT 1
+]
+2026-04-23T20:03:28.664+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-04-23T20:03:28.664+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-04-23T20:03:28.665+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT r.role_code
+FROM sys_user_role ur
+JOIN sys_role r ON r.id = ur.role_id
+WHERE ur.user_id = ?
+ORDER BY r.id
+]
+2026-04-23T20:03:28.665+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT r.role_code
+FROM sys_user_role ur
+JOIN sys_role r ON r.id = ur.role_id
+WHERE ur.user_id = ?
+ORDER BY r.id
+]
+2026-04-23T20:03:28.760+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL update
+2026-04-23T20:03:28.761+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [UPDATE sys_user
+SET last_login_at = NOW(), updated_at = NOW()
+WHERE id = ?
+]
+2026-04-23T20:03:28.766+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] .m.m.a.ExceptionHandlerExceptionResolver : Using @ExceptionHandler com.example.coa.common.GlobalExceptionHandler#handleApiException(ApiException)
+2026-04-23T20:03:28.773+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.w.s.m.m.a.HttpEntityMethodProcessor  : Using 'application/json', given [*/*] and supported [application/json, application/*+json]
+2026-04-23T20:03:28.774+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.w.s.m.m.a.HttpEntityMethodProcessor  : Writing [{code=10001, message=username or password is incorrect, timestamp=1776945808768}]
+2026-04-23T20:03:28.797+08:00  WARN 19916 --- [coa] [nio-8081-exec-2] .m.m.a.ExceptionHandlerExceptionResolver : Resolved [com.example.coa.common.ApiException: username or password is incorrect]
+2026-04-23T20:03:28.798+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Completed 401 UNAUTHORIZED
+2026-04-23T20:03:28.963+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL update
+2026-04-23T20:03:28.964+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [INSERT INTO sys_login_session (
+    user_id, access_token, refresh_token, remember_me, expires_at, refresh_expires_at
+) VALUES (
+    ?, ?, ?, ?, ?, ?
+)
+]
+2026-04-23T20:03:29.106+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] m.m.a.RequestResponseBodyMethodProcessor : Using 'application/json', given [*/*] and supported [application/json, application/*+json]
+2026-04-23T20:03:29.107+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] m.m.a.RequestResponseBodyMethodProcessor : Writing [{accessToken=access-1201-75ce4945-4c53-4b90-bd25-1cfa892f0fa3, refreshToken=refresh-1201-69206903-12 (truncated)...]
+2026-04-23T20:03:29.110+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-1] o.s.web.servlet.DispatcherServlet        : Completed 200 OK
+2026-04-23T20:03:37.331+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.web.servlet.DispatcherServlet        : POST "/api/v1/auth/login", parameters={}
+2026-04-23T20:03:37.332+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] s.w.s.m.m.a.RequestMappingHandlerMapping : Mapped to com.example.coa.controller.AuthController#login(Map)
+2026-04-23T20:03:37.333+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] m.m.a.RequestResponseBodyMethodProcessor : Read "application/json;charset=UTF-8" to [{username=admin.li, password=123456}]
+2026-04-23T20:03:37.334+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-04-23T20:03:37.335+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT
+    u.id,
+    u.username,
+    u.password_hash,
+    u.real_name,
+    u.email,
+    u.phone,
+    u.college_id,
+    bc.college_name,
+    u.status
+FROM sys_user u
+LEFT JOIN base_college bc ON bc.id = u.college_id
+WHERE u.username = ?
+LIMIT 1
+]
+2026-04-23T20:03:37.337+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL query
+2026-04-23T20:03:37.337+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [SELECT r.role_code
+FROM sys_user_role ur
+JOIN sys_role r ON r.id = ur.role_id
+WHERE ur.user_id = ?
+ORDER BY r.id
+]
+2026-04-23T20:03:37.416+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL update
+2026-04-23T20:03:37.418+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [UPDATE sys_user
+SET last_login_at = NOW(), updated_at = NOW()
+WHERE id = ?
+]
+2026-04-23T20:03:37.913+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL update
+2026-04-23T20:03:37.914+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.jdbc.core.JdbcTemplate               : Executing prepared SQL statement [INSERT INTO sys_login_session (
+    user_id, access_token, refresh_token, remember_me, expires_at, refresh_expires_at
+) VALUES (
+    ?, ?, ?, ?, ?, ?
+)
+]
+2026-04-23T20:03:37.999+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] m.m.a.RequestResponseBodyMethodProcessor : Using 'application/json', given [*/*] and supported [application/json, application/*+json]
+2026-04-23T20:03:38.000+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] m.m.a.RequestResponseBodyMethodProcessor : Writing [{accessToken=access-1001-743d59ac-e620-44c7-bf73-ddeaa52a8dd2, refreshToken=refresh-1001-527e7383-f3 (truncated)...]
+2026-04-23T20:03:38.001+08:00 DEBUG 19916 --- [coa] [nio-8081-exec-5] o.s.web.servlet.DispatcherServlet        : Completed 200 OK

@@ -1,9 +1,13 @@
 <template>
   <header class="header">
-    <div>
-      <div class="header-eyebrow">教师端</div>
-      <h1>{{ route.meta.title || '教学目标达成系统' }}</h1>
+    <div class="header-brand">
+      <div class="header-eyebrow">教师端工作台</div>
+      <div class="header-title">高校课程教学目标达成统计及分析系统</div>
+      <div class="header-caption">
+        聚焦教学目标管理、数据采集、达成度核算与教学改进闭环
+      </div>
     </div>
+
     <div class="header-actions">
       <div class="user-card">
         <div class="user-name">{{ authStore.userInfo?.realName || '教师用户' }}</div>
@@ -17,10 +21,9 @@
 </template>
 
 <script setup>
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
-const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
@@ -39,16 +42,26 @@ async function handleLogout() {
   padding: 22px 28px 0;
 }
 
-.header h1 {
-  margin: 4px 0 0;
-  font-size: 26px;
-  color: var(--color-primary-deep);
+.header-brand {
+  display: grid;
+  gap: 6px;
 }
 
 .header-eyebrow {
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--color-text-soft);
+}
+
+.header-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--color-primary-deep);
+}
+
+.header-caption {
+  font-size: 13px;
   color: var(--color-text-soft);
 }
 

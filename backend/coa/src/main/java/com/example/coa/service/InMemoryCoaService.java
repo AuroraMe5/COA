@@ -59,10 +59,10 @@ public class InMemoryCoaService {
 
     public AuthenticatedUser authenticate(String username, String password) {
         Map<String, Object> userRow = findUserRowByUsername(username)
-            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, 10001, "username or password is incorrect"));
+            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, 10001, "用户名或密码错误"));
 
         if (!passwordEncoder.matches(password, stringValue(userRow.get("password_hash")))) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, 10001, "username or password is incorrect");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, 10001, "用户名或密码错误");
         }
 
         jdbcTemplate.update("""
@@ -76,7 +76,7 @@ public class InMemoryCoaService {
     public AuthenticatedUser getUserById(Long userId) {
         return findUserRowById(userId)
             .map(this::toAuthenticatedUser)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 404, "user not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 404, "用户不存在"));
     }
 
     public Map<String, Object> getReferenceCatalogs() {
@@ -117,21 +117,21 @@ public class InMemoryCoaService {
             .orElse(0D);
 
         List<Map<String, Object>> stats = List.of(
-            map("label", "courses", "value", catalogCourses().size(), "tone", "primary"),
-            map("label", "published outlines", "value", count("SELECT COUNT(*) FROM outline_main WHERE status = 1"), "tone", "success"),
-            map("label", "pending imports", "value", count("SELECT COUNT(*) FROM grade_import_batch WHERE status <> 'CONFIRMED'"), "tone", "warning"),
-            map("label", "average achievement", "value", formatNumber(averageAchievement, 2), "tone", "secondary")
+            map("label", "本学期课程数", "value", catalogCourses().size(), "tone", "primary"),
+            map("label", "已发布大纲", "value", count("SELECT COUNT(*) FROM outline_main WHERE status = 1"), "tone", "success"),
+            map("label", "待确认导入", "value", count("SELECT COUNT(*) FROM grade_import_batch WHERE status <> 'CONFIRMED'"), "tone", "warning"),
+            map("label", "平均达成度", "value", formatNumber(averageAchievement, 2), "tone", "secondary")
         );
 
         List<Map<String, Object>> todos = new ArrayList<>();
         if (count("SELECT COUNT(*) FROM parse_task WHERE status = 'PARSING'") > 0) {
-            todos.add(map("id", 1, "text", "There are parsing tasks waiting for review.", "route", "/objectives/parse-import", "level", "high"));
+            todos.add(map("id", 1, "text", "有待复核的智能解析任务。", "route", "/objectives/parse-import", "level", "high"));
         }
         if (count("SELECT COUNT(*) FROM grade_import_batch WHERE status = 'PARSED'") > 0) {
-            todos.add(map("id", 2, "text", "There are parsed grades waiting for confirm.", "route", "/collect/grades", "level", "medium"));
+            todos.add(map("id", 2, "text", "有已解析的成绩批次等待确认导入。", "route", "/collect/grades", "level", "medium"));
         }
         if (count("SELECT COUNT(*) FROM intelligent_suggestion WHERE is_read = 0 AND is_dismissed = 0") > 0) {
-            todos.add(map("id", 3, "text", "There are unread intelligent suggestions.", "route", "/analysis/suggestions", "level", "normal"));
+            todos.add(map("id", 3, "text", "有未读的智能建议待处理。", "route", "/analysis/suggestions", "level", "normal"));
         }
 
         List<Map<String, Object>> quickLinks = List.of(
@@ -254,7 +254,7 @@ public class InMemoryCoaService {
             WHERE outline_id = :outlineId
             """, params("outlineId", outlineId));
         if (objectiveWeight <= 0 || Math.abs(objectiveWeight - 100D) > 0.01D) {
-            throw new ApiException(UNPROCESSABLE_STATUS, 20001, "objective weights must add up to 100");
+            throw new ApiException(UNPROCESSABLE_STATUS, 20001, "课程目标权重合计必须等于100");
         }
 
         double assessWeight = queryDouble("""
@@ -263,7 +263,7 @@ public class InMemoryCoaService {
             WHERE outline_id = :outlineId
             """, params("outlineId", outlineId));
         if (assessWeight <= 0 || Math.abs(assessWeight - 100D) > 0.01D) {
-            throw new ApiException(UNPROCESSABLE_STATUS, 20002, "assessment item weights must add up to 100");
+            throw new ApiException(UNPROCESSABLE_STATUS, 20002, "考核项权重合计必须等于100");
         }
 
         long mappingCount = count("""
@@ -273,7 +273,7 @@ public class InMemoryCoaService {
             WHERE t.outline_id = :outlineId
             """, params("outlineId", outlineId));
         if (mappingCount == 0) {
-            throw new ApiException(UNPROCESSABLE_STATUS, 20003, "objective mapping is required before publish");
+            throw new ApiException(UNPROCESSABLE_STATUS, 20003, "发布前必须完成目标考核映射");
         }
 
         jdbcTemplate.update("""
@@ -316,11 +316,11 @@ public class InMemoryCoaService {
             "objCode", "",
             "objContent", "",
             "objType", 1,
-            "objTypeName", "Knowledge",
+            "objTypeName", "知识",
             "weight", "",
             "sortOrder", 1,
             "decomposeCount", 1,
-            "decompose", List.of(map("id", null, "code", "OBJ-X-1", "content", "", "typeLabel", "KnowledgePoint", "weight", 100))
+            "decompose", List.of(map("id", null, "code", "OBJ-X-1", "content", "", "typeLabel", "知识点", "weight", 100))
         );
     }
 
@@ -384,7 +384,7 @@ public class InMemoryCoaService {
             outlineId = ensureOutline(courseId, semester);
         }
         if (outlineId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, 400, "outlineId or courseId is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, 400, "必须提供 outlineId 或 courseId");
         }
 
         if (booleanValue(payload.get("overwrite"))) {
@@ -640,7 +640,7 @@ public class InMemoryCoaService {
 
         double totalWeight = drafts.stream().mapToDouble(item -> doubleValue(item.get("weight"))).sum();
         if (Math.abs(totalWeight - 100D) > 0.01D) {
-            throw new ApiException(UNPROCESSABLE_STATUS, 400, "confirmed objective weights must add up to 100");
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "已确认目标的权重合计必须等于100");
         }
 
         if (overwrite) {
@@ -2092,12 +2092,12 @@ public class InMemoryCoaService {
         Map<String, Object> course = catalogCourses().stream()
             .filter(item -> longValue(item.get("id")) == courseId)
             .findFirst()
-            .orElse(map("name", "Course"));
+            .orElse(map("name", "课程"));
 
         List<Map<String, Object>> drafts = List.of(
-            map("code", "OBJ-1", "content", "Master the core theoretical framework of " + course.get("name") + ".", "type", 1, "weight", 40, "level", "HIGH"),
-            map("code", "OBJ-2", "content", "Develop the ability to analyze and solve practical " + course.get("name") + " problems.", "type", 2, "weight", 35, "level", "MEDIUM"),
-            map("code", "OBJ-3", "content", "Form规范、协作 and continuous improvement awareness in the learning process.", "type", 3, "weight", 25, "level", "LOW")
+            map("code", "OBJ-1", "content", "掌握《" + course.get("name") + "》的核心理论框架与基础知识。", "type", 1, "weight", 40, "level", "HIGH"),
+            map("code", "OBJ-2", "content", "具备分析并解决《" + course.get("name") + "》实际问题的能力。", "type", 2, "weight", 35, "level", "MEDIUM"),
+            map("code", "OBJ-3", "content", "在学习过程中形成规范意识、协作意识与持续改进意识。", "type", 3, "weight", 25, "level", "LOW")
         );
 
         int sortOrder = 1;
@@ -2349,14 +2349,14 @@ public class InMemoryCoaService {
                 .addValue("semesterId", semesterId)
                 .addValue("ruleId", ruleId)
                 .addValue("ruleCode", ruleCode)
-                .addValue("title", item.get("objCode") + " is below threshold")
-                .addValue("suggestionText", item.get("objCode") + " achievement is below threshold. It is recommended to strengthen targeted teaching support.")
+                .addValue("title", item.get("objCode") + " 达成度低于阈值")
+                .addValue("suggestionText", item.get("objCode") + " 的达成度低于设定阈值，建议针对薄弱环节强化教学支持。")
                 .addValue("dataBasisJson", writeJson(map(
                     "threshold", thresholdValue,
                     "breakdown", List.of(
-                        map("label", "Regular Grade", "value", round4(doubleValue(item.get("normal")))),
-                        map("label", "Mid Exam", "value", round4(doubleValue(item.get("mid")))),
-                        map("label", "Final Exam", "value", round4(doubleValue(item.get("final"))))
+                        map("label", "平时成绩", "value", round4(doubleValue(item.get("normal")))),
+                        map("label", "期中成绩", "value", round4(doubleValue(item.get("mid")))),
+                        map("label", "期末成绩", "value", round4(doubleValue(item.get("final"))))
                     ),
                     "histDetail", getTrendData(courseId, objectiveId)
                 ))));
@@ -2381,8 +2381,8 @@ public class InMemoryCoaService {
                 .addValue("semesterId", semesterId)
                 .addValue("ruleId", ruleId)
                 .addValue("ruleCode", ruleCode)
-                .addValue("title", "Good teaching effect")
-                .addValue("suggestionText", "Overall achievement is good and current practice can be summarized for sharing.")
+                .addValue("title", "整体教学效果良好")
+                .addValue("suggestionText", "课程整体达成情况较好，建议总结当前做法并进行经验分享。")
                 .addValue("dataBasisJson", writeJson(map("histDetail", getTrendData(courseId, null)))));
             created++;
         }
@@ -2400,7 +2400,7 @@ public class InMemoryCoaService {
 
     private List<String> buildSuggestionSummary(long courseId, Long semesterId) {
         if (semesterId == null) {
-            return List.of("No calculation result is available for the selected semester yet.");
+            return List.of("所选学期暂未生成达成度核算结果。");
         }
         List<String> suggestions = jdbcTemplate.query("""
             SELECT title
@@ -2414,7 +2414,7 @@ public class InMemoryCoaService {
             .addValue("courseId", courseId)
             .addValue("semesterId", semesterId), (rs, rowNum) -> rs.getString("title"));
         if (suggestions.isEmpty()) {
-            return List.of("No warning has been triggered yet. You can run the achievement calculation after importing grades.");
+            return List.of("当前尚未触发预警。可在完成成绩导入后运行达成度核算。");
         }
         return suggestions;
     }
@@ -2462,9 +2462,9 @@ public class InMemoryCoaService {
 
     private List<Map<String, Object>> defaultStudentDimensions() {
         return List.of(
-            map("key", "goal_clarity", "label", "Goal clarity", "score", 0),
-            map("key", "teaching_match", "label", "Teaching match", "score", 0),
-            map("key", "assessment_fairness", "label", "Assessment fairness", "score", 0)
+            map("key", "goal_clarity", "label", "目标清晰度", "score", 0),
+            map("key", "teaching_match", "label", "教学匹配度", "score", 0),
+            map("key", "assessment_fairness", "label", "考核公平性", "score", 0)
         );
     }
 
@@ -2474,17 +2474,17 @@ public class InMemoryCoaService {
 
     private String priorityLabel(int priority) {
         return switch (priority) {
-            case 1 -> "High";
-            case 2 -> "Medium";
-            default -> "Low";
+            case 1 -> "高";
+            case 2 -> "中";
+            default -> "低";
         };
     }
 
     private String objTypeName(int type) {
         return switch (type) {
-            case 1 -> "Knowledge";
-            case 2 -> "Ability";
-            default -> "Quality";
+            case 1 -> "知识";
+            case 2 -> "能力";
+            default -> "素养";
         };
     }
 
@@ -2501,9 +2501,9 @@ public class InMemoryCoaService {
 
     private String pointTypeName(int type) {
         return switch (type) {
-            case 1 -> "KnowledgePoint";
-            case 2 -> "AbilityPoint";
-            default -> "QualityPoint";
+            case 1 -> "知识点";
+            case 2 -> "能力点";
+            default -> "素养点";
         };
     }
 
@@ -2547,7 +2547,7 @@ public class InMemoryCoaService {
     private long queryLong(String sql, MapSqlParameterSource params) {
         Long value = jdbcTemplate.query(sql, params, rs -> rs.next() ? rs.getLong(1) : null);
         if (value == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, 404, "record not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, 404, "记录不存在");
         }
         return value;
     }
@@ -2567,7 +2567,7 @@ public class InMemoryCoaService {
 
     private Map<String, Object> requireMap(String sql, MapSqlParameterSource params, RowExtractor extractor) {
         return queryOptional(sql, params, extractor)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 404, "record not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, 404, "记录不存在"));
     }
 
     private Optional<Map<String, Object>> queryOptional(String sql, MapSqlParameterSource params, RowExtractor extractor) {
@@ -2754,3 +2754,5 @@ public class InMemoryCoaService {
         Map<String, Object> extract(ResultSet rs) throws SQLException;
     }
 }
+
+

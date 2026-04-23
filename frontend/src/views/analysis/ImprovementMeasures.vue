@@ -2,7 +2,7 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="结果分析与教学改进"
-      description="根据任务书中的闭环逻辑，这里将改进建议落到具体措施，并跟踪预期效果与实际效果，形成可追踪的教学改进记录。"
+      description="根据任务书中的闭环逻辑，这里将改进建议落到具体措施，并跟踪预期效果与实际效果，形成可追溯的教学改进记录。"
       :tabs="analysisImproveTabs"
     >
       <template #actions>
@@ -150,9 +150,11 @@ import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatCard from '@/components/common/StatCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { useAuthStore } from '@/stores/auth'
 import { analysisImproveTabs } from '@/constants/moduleTabs'
 
 const route = useRoute()
+const authStore = useAuthStore()
 
 const catalogs = reactive({
   courses: [],
@@ -176,7 +178,7 @@ const form = reactive({
   id: null,
   courseId: '',
   semester: '',
-  owner: '王斌',
+  owner: '',
   deadline: '',
   status: 'PLANNED',
   linkedRuleCode: '',
@@ -196,6 +198,10 @@ const statusStats = computed(() => ({
 const pendingEffectCount = computed(() =>
   measures.value.filter((item) => item.status === 'DONE' && !(item.actualEffect || item.effectSummary)).length
 )
+
+function defaultOwner() {
+  return authStore.userInfo?.realName || ''
+}
 
 function setMessage(type, text) {
   message.type = type
@@ -222,7 +228,7 @@ function applyForm(payload) {
   form.id = payload.id || null
   form.courseId = payload.courseId || catalogs.courses[0]?.id || ''
   form.semester = payload.semester || catalogs.semesters[0] || ''
-  form.owner = payload.owner || '王斌'
+  form.owner = payload.owner || defaultOwner()
   form.deadline = payload.deadline || ''
   form.status = payload.status || 'PLANNED'
   form.linkedRuleCode = payload.linkedRuleCode || ''
@@ -244,6 +250,7 @@ function createMeasure() {
     id: null,
     courseId: filters.courseId || catalogs.courses[0]?.id || '',
     semester: filters.semester || catalogs.semesters[0] || '',
+    owner: defaultOwner(),
     status: 'PLANNED'
   })
 }
