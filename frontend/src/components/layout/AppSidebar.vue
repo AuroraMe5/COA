@@ -31,16 +31,17 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
+// 侧边栏按照实际业务流程组织，便于用户理解“先管目标，再采集数据，最后分析改进”。
 const menuGroups = [
   {
     title: '工作台',
     items: [{ label: '首页概览', to: '/dashboard' }]
   },
   {
-    title: '教学目标',
+    title: '教学目标管理',
     items: [
       { label: '课程大纲管理', to: '/objectives/outlines' },
-      { label: '教学目标管理', to: '/objectives/list' },
+      { label: '教学目标列表', to: '/objectives/list' },
       { label: '目标考核映射', to: '/objectives/mapping' }
     ]
   },
@@ -48,6 +49,7 @@ const menuGroups = [
     title: '数据采集',
     items: [
       { label: '成绩批量导入', to: '/collect/grades' },
+      { label: '学生成绩管理', to: '/collect/grades/manage' },
       { label: '学生评价录入', to: '/collect/evaluations' },
       { label: '教学反思录入', to: '/collect/reflections' },
       { label: '督导评价查看', to: '/collect/supervisors' }
@@ -65,14 +67,23 @@ const menuGroups = [
 ]
 
 function isActive(path) {
-  if (path === '/objectives/list' && (
-    route.path.startsWith('/objectives/edit') ||
-    route.path.startsWith('/objectives/weights') ||
-    route.path.startsWith('/objectives/parse-import')
-  )) {
+  // 教学目标模块下有多个“兄弟页面”共用同一导航入口，
+  // 比如编辑页、权重页、解析导入页都应该高亮“教学目标列表”这一组。
+  if (
+    path === '/objectives/list' &&
+    (
+      route.path.startsWith('/objectives/edit') ||
+      route.path.startsWith('/objectives/weights') ||
+      route.path.startsWith('/objectives/parse-import')
+    )
+  ) {
     return true
   }
 
+  // '/collect/grades' must not match when on '/collect/grades/manage'
+  if (path === '/collect/grades') {
+    return route.path === '/collect/grades'
+  }
   return route.path === path || route.path.startsWith(`${path}/`)
 }
 </script>

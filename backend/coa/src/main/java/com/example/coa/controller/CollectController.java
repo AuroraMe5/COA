@@ -2,9 +2,11 @@ package com.example.coa.controller;
 
 import java.util.Map;
 
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,16 +29,20 @@ public class CollectController {
     public Map<String, Object> uploadGradeFile(
         @RequestParam(required = false) MultipartFile file,
         @RequestParam Long courseId,
-        @RequestParam Long assessItemId,
+        @RequestParam(required = false) Long assessItemId,
         @RequestParam String semester
     ) {
-        String fileName = file == null ? "grade-import.xlsx" : file.getOriginalFilename();
-        return coaService.uploadGradeFile(courseId, assessItemId, semester, fileName);
+        return coaService.uploadGradeFile(courseId, assessItemId, semester, file);
     }
 
     @GetMapping("/grades/batches/{batchId}/preview")
     public Map<String, Object> getGradeBatchPreview(@PathVariable String batchId) {
         return coaService.getGradeBatchPreview(batchId);
+    }
+
+    @PutMapping("/grades/batches/{batchId}/preview-rows")
+    public Map<String, Object> updateGradePreviewRow(@PathVariable String batchId, @RequestBody Map<String, Object> payload) {
+        return coaService.updateGradePreviewRow(batchId, payload);
     }
 
     @PostMapping("/grades/batches/{batchId}/confirm")
@@ -49,6 +55,7 @@ public class CollectController {
         @RequestParam(required = false) String courseId,
         @RequestParam(required = false) String assessItemId,
         @RequestParam(required = false) String semester,
+        @RequestParam(required = false) String keyword,
         @RequestParam(required = false) String pageNo,
         @RequestParam(required = false) String pageSize
     ) {
@@ -56,9 +63,25 @@ public class CollectController {
             "courseId", courseId == null ? "" : courseId,
             "assessItemId", assessItemId == null ? "" : assessItemId,
             "semester", semester == null ? "" : semester,
+            "keyword", keyword == null ? "" : keyword,
             "pageNo", pageNo == null ? "" : pageNo,
             "pageSize", pageSize == null ? "" : pageSize
         ));
+    }
+
+    @PostMapping("/grades/rows")
+    public Map<String, Object> saveImportedGradeRow(@RequestBody Map<String, Object> payload) {
+        return coaService.saveImportedGradeRow(payload);
+    }
+
+    @DeleteMapping("/grades/rows")
+    public Map<String, Object> deleteImportedGradeRow(
+        @RequestParam Long courseId,
+        @RequestParam String semester,
+        @RequestParam String studentNo,
+        @RequestParam(required = false) Long assessItemId
+    ) {
+        return coaService.deleteImportedGradeRow(courseId, semester, studentNo, assessItemId);
     }
 
     @GetMapping("/student-evals")

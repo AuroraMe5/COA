@@ -10,6 +10,7 @@ import OutlineManage from '@/views/objectives/OutlineManage.vue'
 import ObjectiveWeights from '@/views/objectives/ObjectiveWeights.vue'
 import ObjectiveMapping from '@/views/objectives/ObjectiveMapping.vue'
 import GradeImportView from '@/views/collect/GradeImportView.vue'
+import GradeManageView from '@/views/collect/GradeManageView.vue'
 import EvaluationEntry from '@/views/collect/EvaluationEntry.vue'
 import ReflectionEntry from '@/views/collect/ReflectionEntry.vue'
 import SupervisorReviewView from '@/views/collect/SupervisorReviewView.vue'
@@ -18,6 +19,8 @@ import SuggestionCenter from '@/views/analysis/SuggestionCenter.vue'
 import AchievementCalculation from '@/views/analysis/AchievementCalculation.vue'
 import ImprovementMeasures from '@/views/analysis/ImprovementMeasures.vue'
 
+// meta.title 目前主要用于路由语义和后续扩展。
+// 头部组件已经不再直接把它渲染成大标题，因此不会再出现“左上角重复标题”的问题。
 const routes = [
   {
     path: '/login',
@@ -84,6 +87,12 @@ const routes = [
         meta: { title: '数据采集' }
       },
       {
+        path: 'collect/grades/manage',
+        name: 'grade-manage',
+        component: GradeManageView,
+        meta: { title: '学生成绩管理' }
+      },
+      {
         path: 'collect/evaluations',
         name: 'collect-evaluations',
         component: EvaluationEntry,
@@ -141,10 +150,18 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
 
+  // 页面刷新后，Pinia 会丢失内存态，所以先尝试从 localStorage 回填。
   if (!authStore.initialized) {
     authStore.hydrate()
   }
 
+  // 页面刷新后，如果 localStorage 里还有旧 token，需要先向后端确认它是否仍然有效。
+  // 这样可以避免“本地看起来已登录，但一进页面所有接口都报 token 失效”的情况。
+  if (authStore.accessToken && !authStore.sessionValidated) {
+    await authStore.ensureSession()
+  }
+
+  // 需要登录但当前没有会话时，带着 redirect 回登录页，登录后可以回跳。
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     return {
       name: 'login',

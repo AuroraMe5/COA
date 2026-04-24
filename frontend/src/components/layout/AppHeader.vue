@@ -1,19 +1,15 @@
 <template>
   <header class="header">
     <div class="header-brand">
-      <div class="header-eyebrow">教师端工作台</div>
+      <div class="header-eyebrow">教师端</div>
       <div class="header-title">高校课程教学目标达成统计及分析系统</div>
-      <div class="header-caption">
-        聚焦教学目标管理、数据采集、达成度核算与教学改进闭环
-      </div>
+      <div class="header-caption">聚焦教学目标管理、数据采集、达成度核算与教学改进闭环</div>
     </div>
 
     <div class="header-actions">
       <div class="user-card">
         <div class="user-name">{{ authStore.userInfo?.realName || '教师用户' }}</div>
-        <div class="user-meta">
-          {{ authStore.userInfo?.collegeName || '课程教学团队' }}
-        </div>
+        <div class="user-meta">{{ authStore.userInfo?.collegeName || '课程教学团队' }}</div>
       </div>
       <button class="btn btn-light" @click="handleLogout">退出登录</button>
     </div>
@@ -28,6 +24,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 async function handleLogout() {
+  // 先清理本地登录状态，再回到登录页，避免界面残留上一位用户的信息。
   await authStore.logoutAction()
   router.push('/login')
 }

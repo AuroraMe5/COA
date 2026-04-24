@@ -70,6 +70,7 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
+// 表单状态集中放在 reactive 中，模板里直接双向绑定，结构会更直观。
 const form = reactive({
   username: '',
   password: '',
@@ -85,6 +86,8 @@ async function handleLogin() {
 
   try {
     await authStore.loginAction(form)
+
+    // 如果用户是被守卫拦截后跳来登录页的，成功后应该回到原目标页面。
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     router.push(redirect)
   } catch (error) {

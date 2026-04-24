@@ -44,6 +44,10 @@
       />
     </div>
 
+    <div v-if="overview.dataSummary.warnings?.length" class="notice warning">
+      <div v-for="item in overview.dataSummary.warnings" :key="item">{{ item }}</div>
+    </div>
+
     <div class="grid-2">
       <PanelCard title="课程达成度对比" subtitle="对比当前教师名下课程的整体达成度。">
         <ChartPanel :option="barOption" height="300px" />
@@ -54,17 +58,52 @@
     </div>
 
     <div class="grid-2">
+      <PanelCard title="考核维度贡献" subtitle="按平时、期中、期末聚合各目标中的达成贡献。">
+        <ChartPanel :option="dimensionOption" height="320px" />
+      </PanelCard>
       <PanelCard title="趋势分析" subtitle="支持查看课程整体或单目标达成趋势。">
         <ChartPanel :option="trendOption" height="320px" />
+      </PanelCard>
+    </div>
+
+    <div class="grid-2">
+      <PanelCard title="数据覆盖情况" subtitle="核对报表当前使用的已确认成绩和待确认成绩。">
+        <div class="detail-list">
+          <div v-for="item in overview.dataSummary.assessItems" :key="item.assessItemId" class="analysis-row">
+            <div>
+              <strong>{{ item.itemName }}</strong>
+              <span>{{ item.itemTypeName }} · 权重 {{ formatPercent(item.weight) }}</span>
+            </div>
+            <div>
+              <strong>{{ Number(item.avgRate || 0).toFixed(3) }}</strong>
+              <span>已确认 {{ item.confirmedRows }} / 待确认 {{ item.pendingRows }}</span>
+            </div>
+          </div>
+        </div>
       </PanelCard>
       <PanelCard title="分析摘要" subtitle="自动归纳当前课程的主要分析结论。">
         <div class="detail-list">
           <div v-for="item in overview.suggestionSummary" :key="item" class="source-segment">
             {{ item }}
           </div>
+          <div v-if="!overview.suggestionSummary.length" class="source-segment">
+            暂无分析摘要，请先完成达成度核算。
+          </div>
         </div>
       </PanelCard>
     </div>
+
+    <PanelCard v-if="overview.weakObjectives.length" title="薄弱目标定位" subtitle="按达成值从低到高列出需要优先关注的目标。">
+      <div class="detail-list">
+        <div v-for="item in overview.weakObjectives" :key="item.objectiveId" class="source-segment weak-item">
+          <div>
+            <strong>{{ item.objCode }}</strong>
+            <span>{{ item.objContent }}</span>
+          </div>
+          <StatusBadge :text="Number(item.achieveValue).toFixed(3)" tone="danger" />
+        </div>
+      </div>
+    </PanelCard>
 
     <PanelCard title="目标明细结果" subtitle="展示各目标在不同考核维度下的表现。">
       <div class="table-shell">
@@ -76,16 +115,21 @@
               <th>期中</th>
               <th>期末</th>
               <th>达成度</th>
+              <th>权重</th>
               <th>状态</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="item in overview.objectives" :key="item.objectiveId">
-              <td>{{ item.objCode }}</td>
-              <td>{{ item.normal.toFixed(2) }}</td>
-              <td>{{ item.mid.toFixed(2) }}</td>
-              <td>{{ item.final.toFixed(2) }}</td>
-              <td class="metric">{{ item.achieveValue.toFixed(2) }}</td>
+              <td>
+                <strong>{{ item.objCode }}</strong>
+                <small class="muted block-text">{{ item.objContent }}</small>
+              </td>
+              <td>{{ item.normal.toFixed(3) }}</td>
+              <td>{{ item.mid.toFixed(3) }}</td>
+              <td>{{ item.final.toFixed(3) }}</td>
+              <td class="metric">{{ item.achieveValue.toFixed(3) }}</td>
+              <td>{{ formatPercent(item.objectiveWeight) }}</td>
               <td>
                 <StatusBadge :text="item.isAchieved ? '达成' : '未达成'" :tone="item.isAchieved ? 'success' : 'danger'" />
               </td>
@@ -124,6 +168,14 @@ const overview = reactive({
   objectives: [],
   compareCourses: [],
   radarData: { indicators: [], values: [] },
+  dimensionData: [],
+  weakObjectives: [],
+  dataSummary: {
+    confirmedGradeRows: 0,
+    pendingGradeRows: 0,
+    assessItems: [],
+    warnings: []
+  },
   suggestionSummary: []
 })
 
@@ -203,6 +255,32 @@ const trendOption = computed(() => ({
   ]
 }))
 
+const dimensionOption = computed(() => ({
+  grid: { top: 30, right: 20, bottom: 36, left: 40 },
+  tooltip: { trigger: 'axis' },
+  xAxis: {
+    type: 'category',
+    data: overview.dimensionData.map((item) => item.name),
+    axisLabel: { color: '#5f7382' }
+  },
+  yAxis: {
+    type: 'value',
+    min: 0,
+    max: 1,
+    axisLabel: { color: '#5f7382' }
+  },
+  series: [
+    {
+      type: 'bar',
+      data: overview.dimensionData.map((item) => item.value),
+      itemStyle: {
+        borderRadius: [8, 8, 0, 0],
+        color: '#b7791f'
+      }
+    }
+  ]
+}))
+
 async function loadOverview() {
   const data = await getCourseOverview({
     courseId: filters.courseId,
@@ -218,6 +296,9 @@ async function loadOverview() {
   overview.objectives = data.objectives
   overview.compareCourses = data.compareCourses
   overview.radarData = data.radarData
+  overview.dimensionData = data.dimensionData || []
+  overview.weakObjectives = data.weakObjectives || []
+  overview.dataSummary = data.dataSummary || overview.dataSummary
   overview.suggestionSummary = data.suggestionSummary
 
   if (!overview.objectives.some((item) => Number(item.objectiveId) === Number(filters.objectiveId))) {
@@ -234,6 +315,10 @@ async function loadTrend() {
   })
 }
 
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(2)}%`
+}
+
 onMounted(loadOverview)
 </script>
 
@@ -244,5 +329,34 @@ onMounted(loadOverview)
   background: #fbfdfe;
   border: 1px solid #e6eef2;
   line-height: 1.8;
+}
+
+.analysis-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid #e6eef2;
+  border-radius: 8px;
+  background: #fbfdfe;
+}
+
+.analysis-row span,
+.block-text,
+.weak-item span {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-text-soft);
+}
+
+.analysis-row > div:last-child {
+  text-align: right;
+}
+
+.weak-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 </style>

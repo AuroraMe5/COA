@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.example.coa.service.InMemoryCoaService;
@@ -27,12 +28,11 @@ public class ParseController {
     @PostMapping("/upload")
     public Map<String, Object> uploadParseFile(
         @RequestParam(required = false) MultipartFile file,
-        @RequestParam Long courseId,
+        @RequestParam(required = false) Long courseId,
         @RequestParam String semester,
         @RequestParam(required = false) Long outlineId
     ) {
-        String fileName = file == null ? "course-outline.pdf" : file.getOriginalFilename();
-        return coaService.uploadParseFile(courseId, semester, fileName);
+        return coaService.uploadParseFile(courseId, semester, file, outlineId);
     }
 
     @GetMapping("/tasks/{taskId}")
@@ -43,6 +43,36 @@ public class ParseController {
     @PutMapping("/drafts/objectives/{id}")
     public Map<String, Object> updateDraftObjective(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
         return coaService.updateParseDraft(id, payload);
+    }
+
+    @PostMapping("/tasks/{taskId}/drafts/objectives")
+    public Map<String, Object> createDraftObjective(@PathVariable String taskId, @RequestBody Map<String, Object> payload) {
+        return coaService.createParseDraft(taskId, payload);
+    }
+
+    @DeleteMapping("/drafts/objectives/{id}")
+    public Map<String, Object> deleteDraftObjective(@PathVariable Long id) {
+        return coaService.deleteParseDraft(id);
+    }
+
+    @PutMapping("/drafts/assess-items/{id}")
+    public Map<String, Object> updateDraftAssessItem(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        return coaService.updateParseAssessDraft(id, payload);
+    }
+
+    @PostMapping("/tasks/{taskId}/drafts/assess-items")
+    public Map<String, Object> createDraftAssessItem(@PathVariable String taskId, @RequestBody Map<String, Object> payload) {
+        return coaService.createParseAssessDraft(taskId, payload);
+    }
+
+    @DeleteMapping("/drafts/assess-items/{id}")
+    public Map<String, Object> deleteDraftAssessItem(@PathVariable Long id) {
+        return coaService.deleteParseAssessDraft(id);
+    }
+
+    @PutMapping("/tasks/{taskId}/mapping")
+    public Map<String, Object> updateParseMappingMatrix(@PathVariable String taskId, @RequestBody Map<String, Object> payload) {
+        return coaService.updateParseMappingMatrix(taskId, payload);
     }
 
     @PostMapping("/tasks/{taskId}/confirm")

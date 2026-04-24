@@ -83,15 +83,24 @@ const dashboard = reactive({
   stats: [],
   todos: [],
   quickLinks: [],
-  courseAchievements: []
+  courseAchievements: [],
+  loadFailed: false
 })
 
 async function loadDashboard() {
-  const data = await getDashboardData()
-  dashboard.stats = data.stats
-  dashboard.todos = data.todos
-  dashboard.quickLinks = data.quickLinks
-  dashboard.courseAchievements = data.courseAchievements
+  try {
+    const data = await getDashboardData()
+    dashboard.stats = data.stats || []
+    dashboard.todos = data.todos || []
+    dashboard.quickLinks = data.quickLinks || []
+    dashboard.courseAchievements = data.courseAchievements || []
+    dashboard.loadFailed = false
+  } catch (error) {
+    // 401 会被接口层统一接管并跳转登录页；
+    // 这里主要兜底其他异常，避免未捕获 Promise 直接打断页面渲染。
+    dashboard.loadFailed = true
+    console.error('加载工作台数据失败：', error)
+  }
 }
 
 onMounted(loadDashboard)
