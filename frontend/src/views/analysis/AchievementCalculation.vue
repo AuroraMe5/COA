@@ -179,8 +179,8 @@
             </tr>
           </thead>
           <tbody>
-            <template v-for="item in record.results">
-              <tr :key="item.objectiveId">
+            <template v-for="item in record.results" :key="item.objectiveId">
+              <tr>
                 <td>
                   <strong>{{ item.objCode }}</strong>
                   <small class="muted block-text">{{ item.objContent }}</small>
@@ -198,7 +198,7 @@
                   <StatusBadge :text="item.isAchieved ? '达成' : '未达成'" :tone="item.isAchieved ? 'success' : 'danger'" />
                 </td>
               </tr>
-              <tr v-if="item.details?.length && record.config.calcMethod !== 'threshold'" :key="`${item.objectiveId}-detail`" class="detail-tr">
+              <tr v-if="item.details?.length && record.config.calcMethod !== 'threshold'" class="detail-tr">
                 <td colspan="7">
                   <div class="detail-chip-grid">
                     <div v-for="detail in item.details" :key="detail.assessItemId" class="detail-chip">
