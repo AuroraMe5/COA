@@ -13,16 +13,16 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.example.coa.service.InMemoryCoaService;
+import com.example.coa.service.GradeService;
 
 @RestController
 @RequestMapping("/api/v1/collect")
 public class CollectController {
 
-    private final InMemoryCoaService coaService;
+    private final GradeService gradeService;
 
-    public CollectController(InMemoryCoaService coaService) {
-        this.coaService = coaService;
+    public CollectController(GradeService gradeService) {
+        this.gradeService = gradeService;
     }
 
     @PostMapping("/grades/upload")
@@ -32,22 +32,22 @@ public class CollectController {
         @RequestParam(required = false) Long assessItemId,
         @RequestParam String semester
     ) {
-        return coaService.uploadGradeFile(courseId, assessItemId, semester, file);
+        return gradeService.uploadGradeFile(courseId, assessItemId, semester, file);
     }
 
     @GetMapping("/grades/batches/{batchId}/preview")
     public Map<String, Object> getGradeBatchPreview(@PathVariable String batchId) {
-        return coaService.getGradeBatchPreview(batchId);
+        return gradeService.getGradeBatchPreview(batchId);
     }
 
     @PutMapping("/grades/batches/{batchId}/preview-rows")
     public Map<String, Object> updateGradePreviewRow(@PathVariable String batchId, @RequestBody Map<String, Object> payload) {
-        return coaService.updateGradePreviewRow(batchId, payload);
+        return gradeService.updateGradePreviewRow(batchId, payload);
     }
 
     @PostMapping("/grades/batches/{batchId}/confirm")
     public Map<String, Object> confirmGradeBatch(@PathVariable String batchId, @RequestBody(required = false) Map<String, Object> payload) {
-        return coaService.confirmGradeBatch(batchId);
+        return gradeService.confirmGradeBatch(batchId);
     }
 
     @GetMapping("/grades")
@@ -59,7 +59,7 @@ public class CollectController {
         @RequestParam(required = false) String pageNo,
         @RequestParam(required = false) String pageSize
     ) {
-        return coaService.getImportedGrades(Map.of(
+        return gradeService.getImportedGrades(Map.of(
             "courseId", courseId == null ? "" : courseId,
             "assessItemId", assessItemId == null ? "" : assessItemId,
             "semester", semester == null ? "" : semester,
@@ -71,7 +71,7 @@ public class CollectController {
 
     @PostMapping("/grades/rows")
     public Map<String, Object> saveImportedGradeRow(@RequestBody Map<String, Object> payload) {
-        return coaService.saveImportedGradeRow(payload);
+        return gradeService.saveImportedGradeRow(payload);
     }
 
     @DeleteMapping("/grades/rows")
@@ -81,40 +81,7 @@ public class CollectController {
         @RequestParam String studentNo,
         @RequestParam(required = false) Long assessItemId
     ) {
-        return coaService.deleteImportedGradeRow(courseId, semester, studentNo, assessItemId);
+        return gradeService.deleteImportedGradeRow(courseId, semester, studentNo, assessItemId);
     }
 
-    @GetMapping("/student-evals")
-    public Map<String, Object> getStudentEvaluations(
-        @RequestParam(required = false) Long courseId,
-        @RequestParam(required = false) String semester
-    ) {
-        return coaService.getStudentEvaluations(courseId, semester);
-    }
-
-    @PostMapping("/student-evals/batch")
-    public Map<String, Object> saveStudentEvaluations(@RequestBody Map<String, Object> payload) {
-        return coaService.saveStudentEvaluations(payload);
-    }
-
-    @GetMapping("/supervisor-evals")
-    public Map<String, Object> getSupervisorEvaluations(
-        @RequestParam(required = false) Long courseId,
-        @RequestParam(required = false) String semester
-    ) {
-        return coaService.getSupervisorEvaluations(courseId, semester);
-    }
-
-    @GetMapping("/teacher-reflections")
-    public Map<String, Object> getTeachingReflection(
-        @RequestParam(required = false) Long courseId,
-        @RequestParam(required = false) String semester
-    ) {
-        return coaService.getTeachingReflection(courseId, semester);
-    }
-
-    @PostMapping("/teacher-reflections")
-    public Map<String, Object> saveTeachingReflection(@RequestBody Map<String, Object> payload) {
-        return coaService.saveTeachingReflection(payload);
-    }
 }

@@ -9,16 +9,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.example.coa.service.InMemoryCoaService;
+import com.example.coa.service.OutlineService;
 
 @RestController
 @RequestMapping("/api/v1/obj-assess-maps")
 public class MappingController {
 
-    private final InMemoryCoaService coaService;
+    private final OutlineService outlineService;
 
-    public MappingController(InMemoryCoaService coaService) {
-        this.coaService = coaService;
+    public MappingController(OutlineService outlineService) {
+        this.outlineService = outlineService;
     }
 
     @GetMapping
@@ -26,11 +26,11 @@ public class MappingController {
         @RequestParam(required = false) Long courseId,
         @RequestParam(required = false) String semester
     ) {
-        return coaService.getObjectiveMapping(courseId, semester);
+        return outlineService.getObjectiveMapping(courseId, semester);
     }
 
     @PutMapping
     public Map<String, Object> saveObjectiveMapping(@RequestBody Map<String, Object> payload) {
-        return coaService.saveObjectiveMapping(payload);
+        return outlineService.saveObjectiveMapping(payload);
     }
 }

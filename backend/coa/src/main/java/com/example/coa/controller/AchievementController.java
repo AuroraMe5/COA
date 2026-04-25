@@ -9,16 +9,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.example.coa.service.InMemoryCoaService;
+import com.example.coa.service.AchievementService;
 
 @RestController
 @RequestMapping("/api/v1/achieve")
 public class AchievementController {
 
-    private final InMemoryCoaService coaService;
+    private final AchievementService achievementService;
 
-    public AchievementController(InMemoryCoaService coaService) {
-        this.coaService = coaService;
+    public AchievementController(AchievementService achievementService) {
+        this.achievementService = achievementService;
     }
 
     @GetMapping("/results")
@@ -26,11 +26,11 @@ public class AchievementController {
         @RequestParam(required = false) Long courseId,
         @RequestParam(required = false) String semester
     ) {
-        return coaService.getAchievementCalculation(courseId, semester);
+        return achievementService.getAchievementResults(courseId, semester);
     }
 
     @PostMapping("/tasks")
     public Map<String, Object> runAchievementCalculation(@RequestBody Map<String, Object> payload) {
-        return coaService.runAchievementCalculation(payload);
+        return achievementService.runAchievementCalculation(payload);
     }
 }

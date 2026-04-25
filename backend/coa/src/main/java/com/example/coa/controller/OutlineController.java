@@ -12,16 +12,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.example.coa.service.InMemoryCoaService;
+import com.example.coa.service.OutlineService;
 
 @RestController
 @RequestMapping("/api/v1/outlines")
 public class OutlineController {
 
-    private final InMemoryCoaService coaService;
+    private final OutlineService outlineService;
 
-    public OutlineController(InMemoryCoaService coaService) {
-        this.coaService = coaService;
+    public OutlineController(OutlineService outlineService) {
+        this.outlineService = outlineService;
     }
 
     @GetMapping
@@ -29,27 +29,27 @@ public class OutlineController {
         @RequestParam(required = false) Long courseId,
         @RequestParam(required = false) String semester
     ) {
-        return coaService.getOutlines(courseId, semester);
+        return outlineService.getOutlines(courseId, semester);
     }
 
     @PostMapping
     public Map<String, Object> createOutline(@RequestBody Map<String, Object> payload) {
-        return coaService.saveOutline(payload);
+        return outlineService.saveOutline(payload);
     }
 
     @PutMapping("/{id}")
     public Map<String, Object> updateOutline(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
         payload.put("id", id);
-        return coaService.saveOutline(payload);
+        return outlineService.saveOutline(payload);
     }
 
     @PatchMapping("/{id}/publish")
     public Map<String, Object> publishOutline(@PathVariable Long id) {
-        return coaService.publishOutline(id);
+        return outlineService.publishOutline(id);
     }
 
     @PostMapping("/{id}/publish")
     public Map<String, Object> publishOutlinePost(@PathVariable Long id) {
-        return coaService.publishOutline(id);
+        return outlineService.publishOutline(id);
     }
 }

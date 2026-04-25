@@ -13,6 +13,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -158,15 +159,11 @@ public class InMemoryCoaService {
         if (count("SELECT COUNT(*) FROM grade_import_batch WHERE status = 'PARSED'") > 0) {
             todos.add(map("id", 2, "text", "有已解析的成绩批次等待确认导入。", "route", "/collect/grades", "level", "medium"));
         }
-        if (count("SELECT COUNT(*) FROM intelligent_suggestion WHERE is_read = 0 AND is_dismissed = 0") > 0) {
-            todos.add(map("id", 3, "text", "有未读的智能建议待处理。", "route", "/analysis/suggestions", "level", "normal"));
-        }
 
         List<Map<String, Object>> quickLinks = List.of(
             map("label", "教学目标管理", "route", "/objectives/list"),
             map("label", "数据采集", "route", "/collect/grades"),
-            map("label", "达成度核算", "route", "/analysis/calculation"),
-            map("label", "智能建议中心", "route", "/analysis/suggestions")
+            map("label", "达成度核算与报告", "route", "/analysis/calculation")
         );
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -1808,9 +1805,11 @@ public class InMemoryCoaService {
         Map<String, Object> result = referenceData();
         result.put("currentCourseId", currentCourseId);
         result.put("currentSemester", currentSemester);
+        result.put("outlineId", outlineId);
         result.put("objectives", objectives);
         result.put("record", map(
             "config", map(
+                "calcRuleId", config.get("id"),
                 "calcMethod", config.get("calc_method"),
                 "thresholdValue", config.get("threshold_value"),
                 "passThreshold", config.get("pass_threshold"),
@@ -2176,7 +2175,7 @@ public class InMemoryCoaService {
             .addValue("expectedEffect", "Raise related objective achievement in the next cycle.")
             .addValue("ownerName", teacherName(teacherId)), keyHolder);
 
-        return map("measureId", keyHolder.getKey().longValue(), "redirectUrl", "/analysis/improvements?measureId=" + keyHolder.getKey().longValue());
+        return map("measureId", keyHolder.getKey().longValue(), "redirectUrl", "/analysis/calculation");
     }
 
     public List<Map<String, Object>> getSuggestionRules() {
@@ -2843,6 +2842,10 @@ public class InMemoryCoaService {
         ensureColumn("parse_task",  "parsed_course_json",   "TEXT NULL");
         ensureColumn("parse_task",  "parsed_mapping_json",  "TEXT NULL");
         ensureColumn("parse_task",  "obj_assess_matrix_json", "TEXT NULL");
+        ensureColumn("teach_objective", "grad_req_id", "VARCHAR(20) NULL");
+        ensureColumn("teach_objective", "grad_req_desc", "VARCHAR(500) NULL");
+        ensureColumn("teach_objective", "relation_level", "VARCHAR(4) DEFAULT 'H'");
+        ensureColumn("intelligent_suggestion", "suggestion_source", "VARCHAR(30) DEFAULT 'RULE'");
     }
 
     private void ensureColumn(String table, String column, String definition) {
@@ -3567,7 +3570,7 @@ public class InMemoryCoaService {
 
     private List<Map<String, Object>> assessItemListByOutline(long outlineId) {
         return jdbcTemplate.query("""
-            SELECT id, item_name, item_type, weight
+            SELECT id, item_name, item_type, weight, max_score
             FROM assess_item
             WHERE outline_id = :outlineId
             ORDER BY sort_order ASC, id ASC
@@ -3576,7 +3579,8 @@ public class InMemoryCoaService {
             "outlineId", outlineId,
             "itemName", rs.getString("item_name"),
             "itemType", defaultString(rs.getString("item_type"), ""),
-            "weight", rs.getBigDecimal("weight")
+            "weight", rs.getBigDecimal("weight"),
+            "maxScore", rs.getBigDecimal("max_score")
         ));
     }
 
@@ -3840,7 +3844,7 @@ public class InMemoryCoaService {
         List<Map<String, Object>> assessItems
     ) throws IOException {
         String lower = fileName.toLowerCase(Locale.ROOT);
-        List<List<String>> rows = lower.endsWith(".csv") ? readCsvRows(file) : readWorkbookRows(file);
+        List<List<String>> rows = lower.endsWith(".csv") ? readCsvRows(file) : readWorkbookRows(file, assessItems);
         if (rows.isEmpty()) {
             throw new ApiException(UNPROCESSABLE_STATUS, 400, "成绩文件为空，请检查表头和数据行。");
         }
@@ -3888,22 +3892,82 @@ public class InMemoryCoaService {
         return new GradeImportResult(imports, imports.size(), validRows, imports.size() - validRows);
     }
 
-    private List<List<String>> readWorkbookRows(MultipartFile file) throws IOException {
+    private List<List<String>> readWorkbookRows(MultipartFile file, List<Map<String, Object>> assessItems) throws IOException {
         DataFormatter formatter = new DataFormatter(Locale.ROOT);
         try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
-            Sheet sheet = workbook.getSheetAt(0);
-            List<List<String>> rows = new ArrayList<>();
-            for (Row row : sheet) {
-                int lastCell = Math.max(row.getLastCellNum(), 0);
-                List<String> cells = new ArrayList<>();
-                for (int index = 0; index < lastCell; index++) {
-                    Cell cell = row.getCell(index, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
-                    cells.add(cell == null ? "" : formatter.formatCellValue(cell).trim());
+            SheetSelection best = null;
+            for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
+                Sheet sheet = workbook.getSheetAt(sheetIndex);
+                List<List<String>> rows = readSheetRows(sheet, formatter);
+                SheetSelection selection = selectGradeSheet(sheet.getSheetName(), rows, assessItems);
+                if (selection == null) {
+                    continue;
                 }
-                rows.add(cells);
+                if (best == null || selection.score() > best.score()) {
+                    best = selection;
+                }
             }
-            return rows;
+            if (best != null) {
+                return best.rows().subList(best.headerIndex(), best.rows().size());
+            }
+            return workbook.getNumberOfSheets() == 0
+                ? List.of()
+                : readSheetRows(workbook.getSheetAt(0), formatter);
         }
+    }
+
+    private List<List<String>> readSheetRows(Sheet sheet, DataFormatter formatter) {
+        List<List<String>> rows = new ArrayList<>();
+        for (Row row : sheet) {
+            int lastCell = Math.max(row.getLastCellNum(), 0);
+            List<String> cells = new ArrayList<>();
+            for (int index = 0; index < lastCell; index++) {
+                Cell cell = row.getCell(index, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
+                cells.add(cell == null ? "" : formatter.formatCellValue(cell).trim());
+            }
+            rows.add(cells);
+        }
+        return rows;
+    }
+
+    private SheetSelection selectGradeSheet(String sheetName, List<List<String>> rows, List<Map<String, Object>> assessItems) {
+        SheetSelection best = null;
+        int inspectRows = Math.min(rows.size(), 20);
+        for (int rowIndex = 0; rowIndex < inspectRows; rowIndex++) {
+            List<String> header = rows.get(rowIndex);
+            if (header.isEmpty()) {
+                continue;
+            }
+            Map<Integer, GradeColumn> columns = resolveGradeColumns(header, assessItems);
+            if (columns.isEmpty()) {
+                continue;
+            }
+            String first = normalizeGradeHeader(cellAt(header, 0));
+            String second = normalizeGradeHeader(cellAt(header, 1));
+            int score = columns.size() * 100;
+            if (first.contains("学号") || first.contains("工号")) {
+                score += 80;
+            }
+            if (second.contains("姓名") || second.contains("学生")) {
+                score += 60;
+            }
+            String normalizedSheet = normalizeGradeHeader(sheetName);
+            if (normalizedSheet.contains("学生成绩")) {
+                score += 120;
+            } else if (normalizedSheet.contains("成绩")) {
+                score += 60;
+            }
+            long nonEmptyDataRows = rows.stream()
+                .skip(rowIndex + 1L)
+                .filter(row -> row.stream().anyMatch(StringUtils::hasText))
+                .count();
+            score += (int) Math.min(nonEmptyDataRows, 50);
+            SheetSelection current = new SheetSelection(sheetName, rows, rowIndex, score);
+            if (best == null || current.score() > best.score()) {
+                best = current;
+            }
+        }
+        return best;
     }
 
     private List<List<String>> readCsvRows(MultipartFile file) throws IOException {
@@ -3945,16 +4009,33 @@ public class InMemoryCoaService {
     }
 
     private Map<Integer, GradeColumn> resolveGradeColumns(List<String> headers, List<Map<String, Object>> assessItems) {
-        Map<Integer, GradeColumn> columns = new LinkedHashMap<>();
+        Map<Long, GradeColumnCandidate> bestByAssessItem = new LinkedHashMap<>();
         for (int index = 2; index < headers.size(); index++) {
             String header = defaultString(headers.get(index), "");
             Map<String, Object> matched = matchAssessItemByHeader(header, assessItems);
             if (matched == null) {
                 continue;
             }
-            columns.put(index, new GradeColumn(longValue(matched.get("id")), extractMaxScore(header)));
+            long assessItemId = longValue(matched.get("id"));
+            GradeColumnCandidate candidate = new GradeColumnCandidate(
+                index,
+                assessItemId,
+                resolveMaxScore(header, matched),
+                gradeHeaderMatchQuality(header, matched)
+            );
+            GradeColumnCandidate existing = bestByAssessItem.get(assessItemId);
+            if (existing == null || candidate.quality() > existing.quality()) {
+                bestByAssessItem.put(assessItemId, candidate);
+            }
         }
-        return columns;
+        return bestByAssessItem.values().stream()
+            .sorted(Comparator.comparingInt(GradeColumnCandidate::index))
+            .collect(Collectors.toMap(
+                GradeColumnCandidate::index,
+                item -> new GradeColumn(item.assessItemId(), item.maxScore()),
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
     }
 
     private Map<String, Object> matchAssessItemByHeader(String header, List<Map<String, Object>> assessItems) {
@@ -3995,11 +4076,62 @@ public class InMemoryCoaService {
             .toLowerCase(Locale.ROOT);
     }
 
-    private double extractMaxScore(String header) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern
-            .compile("[（(]\\s*(\\d+(?:\\.\\d+)?)\\s*分?\\s*[)）]")
-            .matcher(defaultString(header, ""));
-        return matcher.find() ? Double.parseDouble(matcher.group(1)) : 100D;
+    private int gradeHeaderMatchQuality(String header, Map<String, Object> item) {
+        String normalizedHeader = normalizeGradeHeader(header);
+        String normalizedItemName = normalizeGradeHeader(stringValue(item.get("itemName")));
+        int quality = 0;
+        if (StringUtils.hasText(normalizedItemName)) {
+            if (normalizedHeader.equals(normalizedItemName)) {
+                quality += 300;
+            } else if (normalizedHeader.contains(normalizedItemName) || normalizedItemName.contains(normalizedHeader)) {
+                quality += 240;
+            }
+        }
+        if (matchesAssessTypeHeader(normalizedHeader, stringValue(item.get("itemType")))) {
+            quality += 40;
+        }
+        if (extractExplicitMaxScore(header) != null) {
+            quality += 90;
+        }
+        if (containsAnyNormalized(normalizedHeader, List.of("成绩", "折算", "总评", "合计"))) {
+            quality += 50;
+        }
+        boolean headerLooksSplitItem = normalizedHeader.matches(".*\\d+.*");
+        boolean itemLooksSplitItem = normalizedItemName.matches(".*\\d+.*");
+        if (headerLooksSplitItem && !itemLooksSplitItem) {
+            quality -= 30;
+        }
+        return quality;
+    }
+
+    private double resolveMaxScore(String header, Map<String, Object> item) {
+        Double explicitMaxScore = extractExplicitMaxScore(header);
+        if (explicitMaxScore != null && explicitMaxScore > 0D) {
+            return explicitMaxScore;
+        }
+        double maxScore = defaultDouble(item.get("maxScore"), 0D);
+        double weight = defaultDouble(item.get("weight"), 0D);
+        if (maxScore > 0D && Math.abs(maxScore - 100D) > 0.000001D) {
+            return maxScore;
+        }
+        if (weight > 0D && weight < 100D) {
+            return weight;
+        }
+        return maxScore > 0D ? maxScore : 100D;
+    }
+
+    private Double extractExplicitMaxScore(String header) {
+        String text = defaultString(header, "");
+        java.util.regex.Matcher parenMatcher = java.util.regex.Pattern
+            .compile("[（(]\\s*(\\d+(?:\\.\\d+)?)\\s*(?:分|%)?\\s*[)）]")
+            .matcher(text);
+        if (parenMatcher.find()) {
+            return Double.parseDouble(parenMatcher.group(1));
+        }
+        java.util.regex.Matcher dashMatcher = java.util.regex.Pattern
+            .compile("[-—]\\s*(\\d+(?:\\.\\d+)?)\\s*$")
+            .matcher(text);
+        return dashMatcher.find() ? Double.parseDouble(dashMatcher.group(1)) : null;
     }
 
     private ScoreParseResult parseScore(String rawValue, double maxScore) {
@@ -4064,7 +4196,7 @@ public class InMemoryCoaService {
 
     private Map<String, Object> currentCalcRule() {
         return requireMap("""
-            SELECT id, calc_method, threshold_value, pass_threshold
+            SELECT id, calc_method, threshold_value, pass_threshold, config_json
             FROM calc_rule
             WHERE is_default = 1
             ORDER BY id DESC
@@ -4460,10 +4592,10 @@ public class InMemoryCoaService {
             jdbcTemplate.update("""
                 INSERT INTO intelligent_suggestion (
                     receiver_user_id, course_id, objective_id, semester_id, rule_id, rule_code,
-                    priority, title, suggestion_text, data_basis_json, is_read, is_dismissed
+                    suggestion_source, priority, title, suggestion_text, data_basis_json, is_read, is_dismissed
                 ) VALUES (
                     :receiverUserId, :courseId, :objectiveId, :semesterId, :ruleId, :ruleCode,
-                    1, :title, :suggestionText, :dataBasisJson, 0, 0
+                    'REPORT_GEN', 1, :title, :suggestionText, :dataBasisJson, 0, 0
                 )
                 """, new MapSqlParameterSource()
                 .addValue("receiverUserId", teacherId)
@@ -4493,10 +4625,10 @@ public class InMemoryCoaService {
             jdbcTemplate.update("""
                 INSERT INTO intelligent_suggestion (
                     receiver_user_id, course_id, objective_id, semester_id, rule_id, rule_code,
-                    priority, title, suggestion_text, data_basis_json, is_read, is_dismissed
+                    suggestion_source, priority, title, suggestion_text, data_basis_json, is_read, is_dismissed
                 ) VALUES (
                     :receiverUserId, :courseId, NULL, :semesterId, :ruleId, :ruleCode,
-                    3, :title, :suggestionText, :dataBasisJson, 0, 0
+                    'REPORT_GEN', 3, :title, :suggestionText, :dataBasisJson, 0, 0
                 )
                 """, new MapSqlParameterSource()
                 .addValue("receiverUserId", teacherId)
@@ -4919,6 +5051,12 @@ public class InMemoryCoaService {
     }
 
     private record GradeColumn(long assessItemId, double maxScore) {
+    }
+
+    private record GradeColumnCandidate(int index, long assessItemId, double maxScore, int quality) {
+    }
+
+    private record SheetSelection(String sheetName, List<List<String>> rows, int headerIndex, int score) {
     }
 
     private record ScoreParseResult(double score, boolean valid, String errorMessage) {

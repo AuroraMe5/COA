@@ -11,16 +11,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.example.coa.service.InMemoryCoaService;
+import com.example.coa.service.OutlineService;
 
 @RestController
 @RequestMapping("/api/v1/objectives")
 public class ObjectiveController {
 
-    private final InMemoryCoaService coaService;
+    private final OutlineService outlineService;
 
-    public ObjectiveController(InMemoryCoaService coaService) {
-        this.coaService = coaService;
+    public ObjectiveController(OutlineService outlineService) {
+        this.outlineService = outlineService;
     }
 
     @GetMapping
@@ -28,32 +28,32 @@ public class ObjectiveController {
         @RequestParam(required = false) Long courseId,
         @RequestParam(required = false) String semester
     ) {
-        return coaService.getObjectives(courseId, semester);
+        return outlineService.getObjectives(courseId, semester);
     }
 
     @GetMapping("/{id}")
     public Map<String, Object> getObjectiveDetail(@PathVariable Long id) {
-        return coaService.getObjectiveDetail(id);
+        return outlineService.getObjectiveDetail(id);
     }
 
     @PostMapping
     public Map<String, Object> createObjective(@RequestBody Map<String, Object> payload) {
-        return coaService.saveObjective(payload);
+        return outlineService.saveObjective(payload);
     }
 
     @PutMapping("/{id}")
     public Map<String, Object> updateObjective(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
         payload.put("id", id);
-        return coaService.saveObjective(payload);
+        return outlineService.saveObjective(payload);
     }
 
     @PutMapping("/batch-weights")
     public Map<String, Object> saveObjectiveWeights(@RequestBody Map<String, Object> payload) {
-        return coaService.saveObjectiveWeights(payload);
+        return outlineService.saveObjectiveWeights(payload);
     }
 
     @PostMapping("/batch")
     public Map<String, Object> batchCreateObjectives(@RequestBody Map<String, Object> payload) {
-        return coaService.saveObjectiveBatch(payload);
+        return outlineService.saveObjectiveBatch(payload);
     }
 }
