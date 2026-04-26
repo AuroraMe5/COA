@@ -30,10 +30,11 @@ defineProps({
 
 <style scoped>
 .panel-card {
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--bg-panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
 
 .panel-head {
@@ -41,12 +42,14 @@ defineProps({
   justify-content: space-between;
   gap: 16px;
   align-items: flex-start;
-  padding: 22px 22px 0;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-panel-soft);
 }
 
 .panel-head h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   color: var(--color-primary-deep);
 }
 
@@ -64,6 +67,6 @@ defineProps({
 }
 
 .panel-body {
-  padding: 22px;
+  padding: 18px;
 }
 </style>

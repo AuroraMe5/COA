@@ -630,6 +630,9 @@ public class InMemoryCoaService {
                 obj_content_final = :content,
                 obj_type_final = :objType,
                 weight_final = :weight,
+                grad_req_id_final = :gradReqId,
+                grad_req_desc_final = :gradReqDesc,
+                relation_level_final = :relationLevel,
                 is_confirmed = :isConfirmed,
                 updated_at = NOW()
             WHERE id = :id
@@ -639,6 +642,9 @@ public class InMemoryCoaService {
             .addValue("content", defaultString(payload.get("objContentFinal"), ""))
             .addValue("objType", intValue(payload.get("objTypeFinal")))
             .addValue("weight", round2(doubleValue(payload.get("weightFinal"))))
+            .addValue("gradReqId", defaultString(payload.get("gradReqIdFinal"), defaultString(payload.get("gradReqIdSuggest"), "")))
+            .addValue("gradReqDesc", defaultString(payload.get("gradReqDescFinal"), defaultString(payload.get("gradReqDescSuggest"), "")))
+            .addValue("relationLevel", defaultString(payload.get("relationLevelFinal"), defaultString(payload.get("relationLevelSuggest"), "")))
             .addValue("isConfirmed", intValue(payload.get("isConfirmed"))));
         return map("success", true);
     }
@@ -649,11 +655,15 @@ public class InMemoryCoaService {
         jdbcTemplate.update("""
             INSERT INTO parse_objective_draft (
                 parse_task_id, obj_code_suggest, obj_content_suggest, obj_type_suggest, weight_suggest,
+                grad_req_id_suggest, grad_req_desc_suggest, relation_level_suggest,
                 obj_content_final, obj_type_final, weight_final, confidence_score, confidence_level,
+                grad_req_id_final, grad_req_desc_final, relation_level_final,
                 original_text, is_confirmed, sort_order
             ) VALUES (
                 :parseTaskId, :objCode, :content, :objType, :weight,
+                :gradReqId, :gradReqDesc, :relationLevel,
                 :content, :objType, :weight, :confidenceScore, :confidenceLevel,
+                :gradReqId, :gradReqDesc, :relationLevel,
                 :originalText, :isConfirmed, :sortOrder
             )
             """, new MapSqlParameterSource()
@@ -662,6 +672,9 @@ public class InMemoryCoaService {
             .addValue("content", defaultString(payload.get("objContentFinal"), ""))
             .addValue("objType", defaultInt(payload.get("objTypeFinal"), 1))
             .addValue("weight", round2(defaultDouble(payload.get("weightFinal"), 0D)))
+            .addValue("gradReqId", defaultString(payload.get("gradReqIdFinal"), ""))
+            .addValue("gradReqDesc", defaultString(payload.get("gradReqDescFinal"), ""))
+            .addValue("relationLevel", defaultString(payload.get("relationLevelFinal"), ""))
             .addValue("confidenceScore", round4(defaultDouble(payload.get("confidenceScore"), 0.5D)))
             .addValue("confidenceLevel", defaultString(payload.get("confidenceLevel"), "LOW"))
             .addValue("originalText", defaultString(payload.get("originalText"), "教师手动补充"))
@@ -750,7 +763,8 @@ public class InMemoryCoaService {
 
     public Map<String, Object> confirmParseTask(String taskId, Map<String, Object> payload) {
         Map<String, Object> taskRow = requireMap("""
-            SELECT id, course_id, outline_id, semester_id, teacher_id, parsed_course_json, parsed_mapping_json
+            SELECT id, course_id, outline_id, semester_id, teacher_id,
+                   parsed_course_json, parsed_mapping_json, obj_assess_matrix_json
             FROM parse_task
             WHERE task_no = :taskNo
             """, params("taskNo", taskId));
@@ -787,7 +801,10 @@ public class InMemoryCoaService {
             "objCode", defaultString(rs.getString("obj_code_suggest"), "OBJ-" + (rowNum + 1)),
             "objContent", defaultString(rs.getString("obj_content_final"), rs.getString("obj_content_suggest")),
             "objType", rs.getObject("obj_type_final") == null ? rs.getInt("obj_type_suggest") : rs.getInt("obj_type_final"),
-            "weight", rs.getObject("weight_final") == null ? rs.getBigDecimal("weight_suggest") : rs.getBigDecimal("weight_final")
+            "weight", rs.getObject("weight_final") == null ? rs.getBigDecimal("weight_suggest") : rs.getBigDecimal("weight_final"),
+            "gradReqId", defaultString(rs.getString("grad_req_id_final"), defaultString(rs.getString("grad_req_id_suggest"), "")),
+            "gradReqDesc", defaultString(rs.getString("grad_req_desc_final"), defaultString(rs.getString("grad_req_desc_suggest"), "")),
+            "relationLevel", defaultString(rs.getString("relation_level_final"), defaultString(rs.getString("relation_level_suggest"), "H"))
         ));
 
         validateConfirmedWeightTotal(objectiveDrafts, "课程目标", true);
@@ -2842,6 +2859,12 @@ public class InMemoryCoaService {
         ensureColumn("parse_task",  "parsed_course_json",   "TEXT NULL");
         ensureColumn("parse_task",  "parsed_mapping_json",  "TEXT NULL");
         ensureColumn("parse_task",  "obj_assess_matrix_json", "TEXT NULL");
+        ensureColumn("parse_objective_draft", "grad_req_id_suggest", "VARCHAR(20) NULL");
+        ensureColumn("parse_objective_draft", "grad_req_desc_suggest", "VARCHAR(500) NULL");
+        ensureColumn("parse_objective_draft", "relation_level_suggest", "VARCHAR(4) NULL");
+        ensureColumn("parse_objective_draft", "grad_req_id_final", "VARCHAR(20) NULL");
+        ensureColumn("parse_objective_draft", "grad_req_desc_final", "VARCHAR(500) NULL");
+        ensureColumn("parse_objective_draft", "relation_level_final", "VARCHAR(4) NULL");
         ensureColumn("teach_objective", "grad_req_id", "VARCHAR(20) NULL");
         ensureColumn("teach_objective", "grad_req_desc", "VARCHAR(500) NULL");
         ensureColumn("teach_objective", "relation_level", "VARCHAR(4) DEFAULT 'H'");
@@ -2935,6 +2958,25 @@ public class InMemoryCoaService {
             List<Number> proportions = (List<Number>) row.get("proportions");
             if (proportions == null) continue;
 
+            double rowTotalWeight = defaultDouble(row.get("totalWeight"), 0D);
+            if (rowTotalWeight > 0D) {
+                for (int i = 0; i < methodNames.size() && i < proportions.size(); i++) {
+                    Number p = proportions.get(i);
+                    double proportion = p == null ? 0 : p.doubleValue();
+                    double contributionWeight = proportion / rowTotalWeight * 100D;
+                    if (contributionWeight <= 0D) continue;
+                    String methodType = (methodTypes != null && i < methodTypes.size()) ? methodTypes.get(i) : "";
+                    result.add(map(
+                        "objectiveCode", objectiveCode,
+                        "objectiveNumber", objectiveNumber,
+                        "assessItemName", methodNames.get(i),
+                        "assessItemType", methodType,
+                        "contributionWeight", round2(contributionWeight)
+                    ));
+                }
+                continue;
+            }
+
             List<Double> weightedParts = new ArrayList<>();
             double weightedTotal = 0D;
             for (int i = 0; i < methodNames.size() && i < proportions.size(); i++) {
@@ -3001,7 +3043,11 @@ public class InMemoryCoaService {
             "hours", courseInfo.hours(),
             "credits", courseInfo.credits(),
             "prerequisiteCourse", defaultString(courseInfo.prerequisiteCourse(), ""),
-            "courseOwner", defaultString(courseInfo.courseOwner(), "")
+            "courseOwner", defaultString(courseInfo.courseOwner(), ""),
+            "teachingContents", courseInfo.teachingContents(),
+            "assessmentDetails", courseInfo.assessmentDetails(),
+            "assessmentStandards", courseInfo.assessmentStandards(),
+            "assessmentPolicy", courseInfo.assessmentPolicy()
         );
     }
 
@@ -3014,11 +3060,15 @@ public class InMemoryCoaService {
             jdbcTemplate.update("""
                 INSERT INTO parse_objective_draft (
                     parse_task_id, obj_code_suggest, obj_content_suggest, obj_type_suggest, weight_suggest,
+                    grad_req_id_suggest, grad_req_desc_suggest, relation_level_suggest,
                     obj_content_final, obj_type_final, weight_final, confidence_score, confidence_level,
+                    grad_req_id_final, grad_req_desc_final, relation_level_final,
                     original_text, is_confirmed, sort_order
                 ) VALUES (
                     :parseTaskId, :objCode, :objContent, :objType, :weight,
+                    :gradReqId, :gradReqDesc, :relationLevel,
                     :objContent, :objType, :weight, :confidenceScore, :confidenceLevel,
+                    :gradReqId, :gradReqDesc, :relationLevel,
                     :originalText, 0, :sortOrder
                 )
                 """, new MapSqlParameterSource()
@@ -3027,6 +3077,9 @@ public class InMemoryCoaService {
                 .addValue("objContent", suggestion.content())
                 .addValue("objType", suggestion.objType())
                 .addValue("weight", suggestion.weight())
+                .addValue("gradReqId", defaultString(suggestion.gradReqId(), ""))
+                .addValue("gradReqDesc", defaultString(suggestion.gradReqDesc(), ""))
+                .addValue("relationLevel", defaultString(suggestion.relationLevel(), ""))
                 .addValue("confidenceScore", suggestion.confidenceScore())
                 .addValue("confidenceLevel", suggestion.confidenceLevel())
                 .addValue("originalText", suggestion.originalText())
@@ -3098,9 +3151,15 @@ public class InMemoryCoaService {
                 obj_content_suggest,
                 obj_type_suggest,
                 weight_suggest,
+                grad_req_id_suggest,
+                grad_req_desc_suggest,
+                relation_level_suggest,
                 obj_content_final,
                 obj_type_final,
                 weight_final,
+                grad_req_id_final,
+                grad_req_desc_final,
+                relation_level_final,
                 confidence_score,
                 confidence_level,
                 original_text,
@@ -3114,9 +3173,15 @@ public class InMemoryCoaService {
             "objContentSuggest", rs.getString("obj_content_suggest"),
             "objTypeSuggest", rs.getInt("obj_type_suggest"),
             "weightSuggest", rs.getBigDecimal("weight_suggest"),
+            "gradReqIdSuggest", defaultString(rs.getString("grad_req_id_suggest"), ""),
+            "gradReqDescSuggest", defaultString(rs.getString("grad_req_desc_suggest"), ""),
+            "relationLevelSuggest", defaultString(rs.getString("relation_level_suggest"), ""),
             "objContentFinal", defaultString(rs.getString("obj_content_final"), rs.getString("obj_content_suggest")),
             "objTypeFinal", rs.getObject("obj_type_final") == null ? rs.getInt("obj_type_suggest") : rs.getInt("obj_type_final"),
             "weightFinal", rs.getObject("weight_final") == null ? rs.getBigDecimal("weight_suggest") : rs.getBigDecimal("weight_final"),
+            "gradReqIdFinal", defaultString(rs.getString("grad_req_id_final"), defaultString(rs.getString("grad_req_id_suggest"), "")),
+            "gradReqDescFinal", defaultString(rs.getString("grad_req_desc_final"), defaultString(rs.getString("grad_req_desc_suggest"), "")),
+            "relationLevelFinal", defaultString(rs.getString("relation_level_final"), defaultString(rs.getString("relation_level_suggest"), "")),
             "confidenceScore", rs.getBigDecimal("confidence_score"),
             "confidenceLevel", rs.getString("confidence_level"),
             "originalText", rs.getString("original_text"),
@@ -3465,9 +3530,11 @@ public class InMemoryCoaService {
                 GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
                 jdbcTemplate.update("""
                     INSERT INTO teach_objective (
-                        outline_id, obj_code, obj_content, obj_type, weight, sort_order
+                        outline_id, obj_code, obj_content, obj_type, weight, sort_order,
+                        grad_req_id, grad_req_desc, relation_level
                     ) VALUES (
-                        :outlineId, :objCode, :objContent, :objType, :weight, :sortOrder
+                        :outlineId, :objCode, :objContent, :objType, :weight, :sortOrder,
+                        :gradReqId, :gradReqDesc, :relationLevel
                     )
                     """, new MapSqlParameterSource()
                     .addValue("outlineId", outlineId)
@@ -3475,7 +3542,10 @@ public class InMemoryCoaService {
                     .addValue("objContent", draft.get("objContent"))
                     .addValue("objType", draft.get("objType"))
                     .addValue("weight", draft.get("weight"))
-                    .addValue("sortOrder", sortOrder), keyHolder);
+                    .addValue("sortOrder", sortOrder)
+                    .addValue("gradReqId", defaultString(draft.get("gradReqId"), ""))
+                    .addValue("gradReqDesc", defaultString(draft.get("gradReqDesc"), ""))
+                    .addValue("relationLevel", defaultString(draft.get("relationLevel"), "H")), keyHolder);
                 objectiveId = keyHolder.getKey().longValue();
             } else {
                 objectiveId = existingId;
@@ -3485,6 +3555,9 @@ public class InMemoryCoaService {
                         obj_type = :objType,
                         weight = :weight,
                         sort_order = :sortOrder,
+                        grad_req_id = :gradReqId,
+                        grad_req_desc = :gradReqDesc,
+                        relation_level = :relationLevel,
                         updated_at = NOW()
                     WHERE id = :id
                     """, new MapSqlParameterSource()
@@ -3492,7 +3565,10 @@ public class InMemoryCoaService {
                     .addValue("objContent", draft.get("objContent"))
                     .addValue("objType", draft.get("objType"))
                     .addValue("weight", draft.get("weight"))
-                    .addValue("sortOrder", sortOrder));
+                    .addValue("sortOrder", sortOrder)
+                    .addValue("gradReqId", defaultString(draft.get("gradReqId"), ""))
+                    .addValue("gradReqDesc", defaultString(draft.get("gradReqDesc"), ""))
+                    .addValue("relationLevel", defaultString(draft.get("relationLevel"), "H")));
             }
 
             jdbcTemplate.update("DELETE FROM obj_decompose WHERE objective_id = :objectiveId", params("objectiveId", objectiveId));

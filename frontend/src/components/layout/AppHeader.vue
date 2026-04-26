@@ -36,7 +36,12 @@ async function handleLogout() {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 22px 28px 0;
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  padding: 14px 24px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .header-brand {
@@ -46,13 +51,13 @@ async function handleLogout() {
 
 .header-eyebrow {
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--color-text-soft);
 }
 
 .header-title {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 800;
   color: var(--color-primary-deep);
 }
@@ -69,11 +74,10 @@ async function handleLogout() {
 }
 
 .user-card {
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
   border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-soft);
 }
 
 .user-name {
@@ -89,9 +93,18 @@ async function handleLogout() {
 
 @media (max-width: 720px) {
   .header {
-    padding: 18px 18px 0;
+    padding: 14px 16px;
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .header-caption {
+    display: none;
   }
 }
 </style>

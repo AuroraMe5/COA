@@ -3,7 +3,6 @@
     <ModuleHeader
       title="教学目标管理"
       :description="isEditMode ? '在统一模块中维护教学目标基础信息与分解点。保存后会回到教学目标列表，后续可继续在权重页集中校验。' : '在教学目标管理模块中新增目标，并同步维护目标类型、权重与分解点，为后续达成度核算做好准备。'"
-      :tabs="objectiveManageTabs"
     >
       <template #actions>
         <button class="btn btn-light" @click="router.push('/objectives/list')">返回列表</button>
@@ -68,7 +67,7 @@
 
     <PanelCard
       title="目标分解点"
-      subtitle="支持维护知识点、能力点或素养点。建议完成录入后再切换到“目标分解与权重”页签进行合计校验。"
+      subtitle="支持维护知识点、能力点或素养点。建议完成录入后从侧边栏进入“目标分解与权重”进行合计校验。"
     >
       <div class="detail-list">
         <div v-for="(item, index) in form.decompose" :key="item.id" class="decompose-card">
@@ -113,7 +112,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { getObjectiveDetail, getReferenceCatalogs, saveObjective } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
-import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const route = useRoute()
 const router = useRouter()
@@ -272,8 +270,8 @@ onMounted(loadPage)
 
 <style scoped>
 .decompose-card {
-  padding: 18px;
-  border-radius: 18px;
+  padding: 16px;
+  border-radius: var(--radius-md);
   border: 1px solid #e6eef2;
   background: #fbfdfe;
 }

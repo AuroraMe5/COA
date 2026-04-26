@@ -11,13 +11,7 @@ import ObjectiveWeights from '@/views/objectives/ObjectiveWeights.vue'
 import ObjectiveMapping from '@/views/objectives/ObjectiveMapping.vue'
 import GradeImportView from '@/views/collect/GradeImportView.vue'
 import GradeManageView from '@/views/collect/GradeManageView.vue'
-import EvaluationEntry from '@/views/collect/EvaluationEntry.vue'
-import ReflectionEntry from '@/views/collect/ReflectionEntry.vue'
-import SupervisorReviewView from '@/views/collect/SupervisorReviewView.vue'
-import AnalysisOverview from '@/views/analysis/AnalysisOverview.vue'
-import SuggestionCenter from '@/views/analysis/SuggestionCenter.vue'
 import AchievementCalculation from '@/views/analysis/AchievementCalculation.vue'
-import ImprovementMeasures from '@/views/analysis/ImprovementMeasures.vue'
 
 // meta.title 目前主要用于路由语义和后续扩展。
 // 头部组件已经不再直接把它渲染成大标题，因此不会再出现“左上角重复标题”的问题。
@@ -93,45 +87,9 @@ const routes = [
         meta: { title: '学生成绩管理' }
       },
       {
-        path: 'collect/evaluations',
-        name: 'collect-evaluations',
-        component: EvaluationEntry,
-        meta: { title: '数据采集' }
-      },
-      {
-        path: 'collect/reflections',
-        name: 'collect-reflections',
-        component: ReflectionEntry,
-        meta: { title: '数据采集' }
-      },
-      {
-        path: 'collect/supervisors',
-        name: 'collect-supervisors',
-        component: SupervisorReviewView,
-        meta: { title: '数据采集' }
-      },
-      {
         path: 'analysis/calculation',
         name: 'analysis-calculation',
         component: AchievementCalculation,
-        meta: { title: '结果分析与教学改进' }
-      },
-      {
-        path: 'analysis/overview',
-        name: 'analysis-overview',
-        component: AnalysisOverview,
-        meta: { title: '结果分析与教学改进' }
-      },
-      {
-        path: 'analysis/suggestions',
-        name: 'suggestions',
-        component: SuggestionCenter,
-        meta: { title: '结果分析与教学改进' }
-      },
-      {
-        path: 'analysis/improvements',
-        name: 'improvements',
-        component: ImprovementMeasures,
         meta: { title: '结果分析与教学改进' }
       }
     ]

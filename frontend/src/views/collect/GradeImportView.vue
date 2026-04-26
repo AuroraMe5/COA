@@ -2,8 +2,7 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="数据采集"
-      description="数据采集模块统一承接成绩、评价、反思与督导信息，成绩批量导入负责形成达成度核算的基础成绩数据。"
-      :tabs="collectModuleTabs"
+      description="数据采集模块聚焦学生信息与成绩数据，批量导入结果将直接用于课程目标达成度核算。"
     />
 
     <div class="step-row">
@@ -152,7 +151,6 @@ import {
 } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
-import { collectModuleTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],
@@ -339,7 +337,7 @@ onBeforeUnmount(stopPolling)
   gap: 4px;
   padding: 10px 12px;
   border: 1px solid #dce8ef;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: #fbfdfe;
 }
 

@@ -3,7 +3,6 @@
     <ModuleHeader
       title="教学目标管理"
       description="课程大纲是教学目标管理的起点，用于维护课程版本、课程简介和目标来源，并为后续目标配置提供基础。"
-      :tabs="objectiveManageTabs"
     />
 
     <div class="filter-bar">
@@ -109,7 +108,6 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],
@@ -220,14 +218,15 @@ onMounted(loadOutlines)
 .outline-item {
   width: 100%;
   border: 1px solid #e6eef2;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   background: #fbfdfe;
-  padding: 16px;
+  padding: 14px;
   text-align: left;
 }
 
 .outline-item.active {
   border-color: rgba(31, 95, 139, 0.28);
-  background: linear-gradient(180deg, rgba(234, 243, 251, 0.85), #fff);
+  background: #fbfdfe;
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 </style>

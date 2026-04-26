@@ -2,8 +2,7 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="结果分析与教学改进"
-      description="按照任务书中的闭环逻辑，先完成达成度核算，再进入多维分析、智能建议和改进措施跟踪。当前页面用于配置核算规则并执行核算。"
-      :tabs="analysisImproveTabs"
+      description="按照需求梳理中的闭环逻辑，基于大纲目标、成绩数据和考核映射完成达成度核算，并输出课程目标达成情况报告。"
     >
       <template #actions>
         <button class="btn btn-primary" :disabled="running" @click="runCalculation">
@@ -214,17 +213,50 @@
         </table>
       </div>
     </PanelCard>
+
+    <PanelCard v-if="hasCalcResult" title="导出达成度报告" subtitle="生成包含课程概况、成绩统计、目标达成分析和学生明细附录的 Word 报告。">
+      <div class="export-section">
+        <div v-if="reportMeta" class="meta-preview">
+          <StatCard label="参与学生" :value="`${reportMeta.studentCount} 人`" tone="primary" />
+          <StatCard label="低达成度学生" :value="`${reportMeta.weakStudentCount} 人`" :tone="reportMeta.weakStudentCount > 0 ? 'warning' : 'success'" />
+          <StatCard
+            v-for="obj in reportMeta.objectives"
+            :key="obj.id"
+            :label="obj.name"
+            :value="`${(Number(obj.achievement || 0) * 100).toFixed(1)}%`"
+            :helper="obj.judgement"
+            :tone="Number(obj.achievement || 0) >= 0.6 ? 'success' : 'warning'"
+          />
+        </div>
+
+        <p class="export-desc">
+          报告将包含：课程概况、课程目标对毕业要求的支撑、成绩评定方法、成绩统计与试题分析、课程目标达成度计算与分析、总结与改进，以及全体学生明细附录。
+        </p>
+
+        <div class="export-actions">
+          <button class="btn btn-light" :disabled="metaLoading" @click="loadReportMeta">
+            {{ metaLoading ? '读取中...' : '预览报告信息' }}
+          </button>
+          <button class="btn btn-primary" :disabled="downloading" @click="handleDownload">
+            {{ downloading ? '生成中...' : '下载达成度报告（.docx）' }}
+          </button>
+        </div>
+
+        <div v-if="downloading" class="notice info">
+          正在生成报告，请稍候（通常需要 5~15 秒）。
+        </div>
+      </div>
+    </PanelCard>
   </div>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch } from 'vue'
-import { getAchievementCalculation, runAchievementCalculation } from '@/api'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { downloadReport, getAchievementCalculation, getReportPreviewMeta, runAchievementCalculation } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatCard from '@/components/common/StatCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import { analysisImproveTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],
@@ -240,6 +272,7 @@ const objectives = ref([])
 
 const record = reactive({
   config: {
+    calcRuleId: null,
     calcMethod: 'weighted_avg',
     thresholdValue: 0.7,
     passThreshold: 0.6,
@@ -261,10 +294,16 @@ const record = reactive({
 })
 
 const running = ref(false)
+const currentOutlineId = ref(null)
+const reportMeta = ref(null)
+const metaLoading = ref(false)
+const downloading = ref(false)
 const message = reactive({
   type: 'success',
   text: ''
 })
+
+const hasCalcResult = computed(() => Boolean(record.generatedAt || record.results?.length))
 
 watch(() => record.config.calcMethod, (method) => {
   if (method === 'custom') {
@@ -284,6 +323,7 @@ function setMessage(type, text) {
 
 function applyRecord(payload) {
   if (payload.config) {
+    record.config.calcRuleId = payload.config.calcRuleId || null
     record.config.calcMethod = payload.config.calcMethod || 'weighted_avg'
     record.config.thresholdValue = payload.config.thresholdValue || 0.7
     record.config.passThreshold = payload.config.passThreshold || 0.6
@@ -306,6 +346,8 @@ async function loadPage() {
   catalogs.semesters = data.semesters
   filters.courseId = data.currentCourseId
   filters.semester = data.currentSemester
+  currentOutlineId.value = data.outlineId
+  reportMeta.value = null
   objectives.value = data.objectives || []
   applyRecord(data.record)
 }
@@ -325,6 +367,8 @@ async function runCalculation() {
       payload.retakeEnabled = record.config.retakeEnabled
     }
     const data = await runAchievementCalculation(payload)
+    currentOutlineId.value = data.outlineId
+    reportMeta.value = null
     objectives.value = data.objectives || []
     applyRecord(data.record)
     setMessage('success', '达成度核算已完成，结果已更新。')
@@ -332,6 +376,47 @@ async function runCalculation() {
     setMessage('error', error.message || '核算失败。')
   } finally {
     running.value = false
+  }
+}
+
+function assertReportParams() {
+  if (!currentOutlineId.value) {
+    setMessage('error', '当前课程学期尚未建立课程大纲，暂不能生成报告。')
+    return false
+  }
+  if (!record.config.calcRuleId) {
+    setMessage('error', '请先完成一次达成度核算，再生成报告。')
+    return false
+  }
+  return true
+}
+
+async function loadReportMeta() {
+  if (!assertReportParams()) {
+    return
+  }
+  metaLoading.value = true
+  try {
+    reportMeta.value = await getReportPreviewMeta(currentOutlineId.value, record.config.calcRuleId)
+  } catch (error) {
+    setMessage('error', error.message || '报告信息读取失败。')
+  } finally {
+    metaLoading.value = false
+  }
+}
+
+async function handleDownload() {
+  if (!assertReportParams()) {
+    return
+  }
+  downloading.value = true
+  try {
+    await downloadReport(currentOutlineId.value, record.config.calcRuleId)
+    setMessage('success', '达成度报告已生成。')
+  } catch (error) {
+    setMessage('error', error.message || '报告生成失败。')
+  } finally {
+    downloading.value = false
   }
 }
 
@@ -408,6 +493,29 @@ onMounted(loadPage)
 .method-hint {
   font-size: 13px;
   line-height: 1.6;
+}
+
+.export-section {
+  display: grid;
+  gap: 16px;
+}
+
+.meta-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.export-desc {
+  margin: 0;
+  color: var(--color-text-soft);
+  line-height: 1.8;
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .mt-8 {

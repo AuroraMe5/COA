@@ -270,27 +270,6 @@ export function confirmGradeBatch(batchId, payload) {
   return postData(`/collect/grades/batches/${batchId}/confirm`, payload)
 }
 
-// 数据采集
-export function getStudentEvaluations(params) {
-  return getData('/collect/student-evals', { params })
-}
-
-export function getSupervisorEvaluations(params) {
-  return getData('/collect/supervisor-evals', { params })
-}
-
-export function saveStudentEvaluations(payload) {
-  return postData('/collect/student-evals/batch', payload)
-}
-
-export function getTeachingReflection(params) {
-  return getData('/collect/teacher-reflections', { params })
-}
-
-export function saveTeachingReflection(payload) {
-  return postData('/collect/teacher-reflections', payload)
-}
-
 // 达成度核算与分析
 export function getAchievementCalculation(params) {
   return getData('/achieve/results', { params })
@@ -300,42 +279,25 @@ export function runAchievementCalculation(payload) {
   return postData('/achieve/tasks', payload)
 }
 
-export function getCourseOverview(params) {
-  return getData('/analysis/course-overview', { params })
+export function getReportPreviewMeta(outlineId, calcRuleId) {
+  return getData('/report/preview-meta', { params: { outlineId, calcRuleId } })
 }
 
-export function getTrendData(params) {
-  return getData('/analysis/trend', { params })
-}
-
-// 智能建议
-export function getSuggestions(params) {
-  return getData('/intelligent-suggestions', { params })
-}
-
-export function getSuggestionDetail(id) {
-  return getData(`/intelligent-suggestions/${id}`)
-}
-
-export function markSuggestionRead(id) {
-  return patchData(`/intelligent-suggestions/${id}/read`)
-}
-
-export function dismissSuggestion(id, payload) {
-  return patchData(`/intelligent-suggestions/${id}/dismiss`, payload)
-}
-
-export function createMeasureFromSuggestion(id) {
-  return postData(`/intelligent-suggestions/${id}/create-measure`)
-}
-
-// 改进措施
-export function getImprovementMeasures(params) {
-  return getData('/improve/measures', { params })
-}
-
-export function saveImprovementMeasure(payload) {
-  return saveById('/improve/measures', payload)
+export async function downloadReport(outlineId, calcRuleId) {
+  const response = await request.get('/report/download', {
+    params: { outlineId, calcRuleId },
+    responseType: 'blob',
+    timeout: 60000
+  })
+  const contentDisposition = response.headers['content-disposition'] || ''
+  const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?(.+)/)
+  const filename = match ? decodeURIComponent(match[1]) : '达成度报告.docx'
+  const url = URL.createObjectURL(new Blob([response.data]))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 export default request

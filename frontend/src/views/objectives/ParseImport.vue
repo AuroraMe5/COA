@@ -3,7 +3,6 @@
     <ModuleHeader
       title="教学目标管理"
       description="智能解析导入会基于真实上传的课程大纲文件提取课程目标与考核项，教师可以在写入前逐条复核、修改和补充。"
-      :tabs="objectiveManageTabs"
     >
       <template #actions>
         <button class="btn btn-light" @click="createObjective">手工新增目标</button>
@@ -186,6 +185,91 @@
       </label>
     </PanelCard>
 
+    <PanelCard
+      v-if="showReviewPanel && hasExtendedExtraction"
+      title="大纲扩展提取内容"
+      subtitle="以下内容来自教学大纲后半段，用于核对教学内容、教学安排、考核说明和评价标准是否完整。"
+    >
+      <div v-if="parsedTeachingContents.length" class="mt-0">
+        <h3 class="section-subtitle">教学内容与学时安排</h3>
+        <table class="data-table compact-table">
+          <thead>
+            <tr>
+              <th>课程内容</th>
+              <th>讲授学时</th>
+              <th>上机学时</th>
+              <th>教学方式</th>
+              <th>覆盖目标</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in parsedTeachingContents" :key="item.title">
+              <td>{{ item.title }}</td>
+              <td>{{ item.lectureHours || '—' }}</td>
+              <td>{{ item.practiceHours || '—' }}</td>
+              <td>{{ item.teachingMethod || '—' }}</td>
+              <td>{{ item.relatedObjectives || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="hasAssessmentPolicy" class="mt-16">
+        <h3 class="section-subtitle">成绩记载与考核政策</h3>
+        <div class="policy-grid">
+          <div>
+            <span>成绩记载方式</span>
+            <strong>{{ parsedAssessmentPolicy.scoreRecordMode || '—' }}</strong>
+          </div>
+          <div>
+            <span>最终成绩组成</span>
+            <strong>{{ parsedAssessmentPolicy.finalGradeComposition || '—' }}</strong>
+          </div>
+          <div>
+            <span>考核方式</span>
+            <strong>{{ parsedAssessmentPolicy.assessmentMode || '—' }}</strong>
+          </div>
+          <div>
+            <span>是否设置补考</span>
+            <strong>{{ parsedAssessmentPolicy.makeupExam || '—' }}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="parsedAssessmentDetails.length" class="mt-16">
+        <h3 class="section-subtitle">考核要求与成绩评定</h3>
+        <table class="data-table compact-table">
+          <thead>
+            <tr>
+              <th>考核方式</th>
+              <th>权重</th>
+              <th>考核内容</th>
+              <th>评价办法</th>
+              <th>支撑要求</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in parsedAssessmentDetails" :key="item.name">
+              <td>{{ item.name }}</td>
+              <td>{{ formatPercentWeight(item.weight) }}</td>
+              <td>{{ item.content || '—' }}</td>
+              <td>{{ item.evaluationMethod || '—' }}</td>
+              <td>{{ item.supports || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="parsedAssessmentStandards.length" class="mt-16">
+        <h3 class="section-subtitle">考核与评价标准片段</h3>
+        <div class="standard-list">
+          <div v-for="(item, index) in parsedAssessmentStandards" :key="`${index}-${item}`" class="standard-line">
+            {{ item }}
+          </div>
+        </div>
+      </div>
+    </PanelCard>
+
     <div v-if="showReviewPanel" class="split-panel">
       <PanelCard title="原文片段" subtitle="左侧展示系统抓取的原文，右侧展示可编辑草稿，便于逐条核对。">
         <div class="detail-list">
@@ -244,6 +328,32 @@
                     @blur="saveObjectiveDraft(item)"
                   />
                 </div>
+              </div>
+
+              <div class="form-grid-2 mt-12">
+                <div class="form-field">
+                  <label>支撑毕业要求</label>
+                  <input
+                    v-model.trim="item.gradReqIdFinal"
+                    class="text-input"
+                    placeholder="如 3.1"
+                    @blur="saveObjectiveDraft(item)"
+                  />
+                </div>
+                <div class="form-field">
+                  <label>关联程度</label>
+                  <select v-model="item.relationLevelFinal" class="select-input" @change="saveObjectiveDraft(item)">
+                    <option value="">待定</option>
+                    <option value="H">H</option>
+                    <option value="M">M</option>
+                    <option value="L">L</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-field mt-12">
+                <label>毕业要求简述</label>
+                <textarea v-model.trim="item.gradReqDescFinal" class="text-area" @blur="saveObjectiveDraft(item)" />
               </div>
 
               <div class="source-tip mt-12">
@@ -408,7 +518,6 @@ import {
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const router = useRouter()
 
@@ -462,6 +571,17 @@ const currentStep = computed(() => {
 })
 
 const showReviewPanel = computed(() => task.value && ['DONE', 'CONFIRMED'].includes(task.value.status))
+const parsedCourse = computed(() => task.value?.parsedCourse || {})
+const parsedTeachingContents = computed(() => parsedCourse.value.teachingContents || [])
+const parsedAssessmentDetails = computed(() => parsedCourse.value.assessmentDetails || [])
+const parsedAssessmentStandards = computed(() => parsedCourse.value.assessmentStandards || [])
+const parsedAssessmentPolicy = computed(() => parsedCourse.value.assessmentPolicy || {})
+const hasAssessmentPolicy = computed(() =>
+  Object.values(parsedAssessmentPolicy.value).some((value) => String(value || '').trim())
+)
+const hasExtendedExtraction = computed(() =>
+  parsedTeachingContents.value.length || parsedAssessmentDetails.value.length || parsedAssessmentStandards.value.length || hasAssessmentPolicy.value
+)
 
 const selectedTargetCourse = computed(() =>
   catalogs.courses.find((c) => String(c.id) === String(overwriteTargetCourseId.value)) || null
@@ -622,6 +742,12 @@ function formatCourseValue(value) {
   return String(value)
 }
 
+function formatPercentWeight(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  return `${number.toFixed(Math.abs(number - Math.round(number)) < 0.001 ? 0 : 2)}%`
+}
+
 function confidenceTone(level) {
   if (level === 'HIGH') return 'success'
   if (level === 'MEDIUM') return 'warning'
@@ -760,6 +886,9 @@ async function saveObjectiveDraft(item, successText = '') {
       objContentFinal: item.objContentFinal,
       objTypeFinal: Number(item.objTypeFinal),
       weightFinal: Number(item.weightFinal),
+      gradReqIdFinal: item.gradReqIdFinal || '',
+      gradReqDescFinal: item.gradReqDescFinal || '',
+      relationLevelFinal: item.relationLevelFinal || '',
       isConfirmed: Number(item.isConfirmed)
     })
     syncMappingRowTotals()
@@ -794,6 +923,9 @@ async function addObjectiveDraft() {
       objContentFinal: '',
       objTypeFinal: 1,
       weightFinal: 0,
+      gradReqIdFinal: '',
+      gradReqDescFinal: '',
+      relationLevelFinal: '',
       isConfirmed: 0,
       confidenceLevel: 'LOW',
       confidenceScore: 0.5,
@@ -1023,12 +1155,12 @@ onBeforeUnmount(() => {
 .split-panel {
   display: grid;
   grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.3fr);
-  gap: 20px;
+  gap: 16px;
 }
 
 .feedback-dialog {
   position: sticky;
-  top: 16px;
+  top: 12px;
   z-index: 20;
   outline: none;
 }
@@ -1038,20 +1170,20 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 18px;
+  padding: 14px 16px;
   border: 1px solid rgba(229, 62, 62, 0.35);
-  border-left: 6px solid var(--color-danger, #e53e3e);
-  border-radius: 14px;
+  border-left: 4px solid var(--color-danger, #e53e3e);
+  border-radius: var(--radius-md);
   background: #fff7f7;
   color: var(--color-text);
-  box-shadow: 0 18px 42px rgba(84, 32, 32, 0.16);
+  box-shadow: var(--shadow-card);
 }
 
 .feedback-success .feedback-dialog-panel {
   border-color: rgba(56, 161, 105, 0.35);
   border-left-color: var(--color-success, #38a169);
   background: #f3fff8;
-  box-shadow: 0 18px 42px rgba(32, 84, 55, 0.14);
+  box-shadow: var(--shadow-card);
 }
 
 .feedback-error .feedback-dialog-panel {
@@ -1073,8 +1205,8 @@ onBeforeUnmount(() => {
 
 .source-segment,
 .draft-card {
-  padding: 16px;
-  border-radius: 18px;
+  padding: 14px;
+  border-radius: var(--radius-md);
   border: 1px solid #e6eef2;
   background: #fbfdfe;
 }
@@ -1082,12 +1214,12 @@ onBeforeUnmount(() => {
 .draft-card {
   position: relative;
   overflow: hidden;
-  border-left: 6px solid #d8e5ec;
+  border-left: 4px solid #d8e5ec;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
 .draft-card:hover {
-  box-shadow: 0 12px 28px rgba(32, 63, 84, 0.08);
+  box-shadow: var(--shadow-soft);
 }
 
 .draft-pending {
@@ -1154,8 +1286,67 @@ onBeforeUnmount(() => {
   color: var(--color-text-soft);
 }
 
+.section-subtitle {
+  margin: 0 0 10px;
+  font-size: 15px;
+  color: var(--color-text);
+}
+
+.compact-table th,
+.compact-table td {
+  vertical-align: top;
+}
+
+.standard-list {
+  display: grid;
+  gap: 8px;
+}
+
+.standard-line {
+  padding: 10px 12px;
+  border: 1px solid #e6eef2;
+  border-radius: 8px;
+  background: #fbfdfe;
+  color: var(--color-text-soft);
+  line-height: 1.6;
+}
+
+.policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.policy-grid > div {
+  padding: 10px 12px;
+  border: 1px solid #e6eef2;
+  border-radius: 8px;
+  background: #fbfdfe;
+}
+
+.policy-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--color-text-muted, #718096);
+  font-size: 12px;
+}
+
+.policy-grid strong {
+  display: block;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
 @media (max-width: 1080px) {
   .split-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .policy-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1181,7 +1372,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 10px 14px;
   border: 1px solid #d7e3ea;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: #fbfdfe;
   color: var(--color-text);
   font-weight: 600;
@@ -1192,7 +1383,7 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 0;
   border: 1px solid #e6eef2;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   font-size: 13px;
 }

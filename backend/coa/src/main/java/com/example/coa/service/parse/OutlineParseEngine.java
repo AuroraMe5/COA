@@ -52,10 +52,11 @@ public class OutlineParseEngine {
         "课程目标", "教学目标", "学习目标", "course objectives", "teaching objectives", "learning objectives"
     );
     private static final List<String> OBJECTIVE_SECTION_EXCLUDE_KEYWORDS = List.of(
-        "对应课程目标", "课程目标达成", "课程目标与毕业要求", "课程目标支撑", "毕业要求与课程目标"
+        "对应课程目标", "课程目标达成", "课程目标与毕业要求", "课程目标支撑", "毕业要求与课程目标",
+        "覆盖课程目标", "重点覆盖课程目标"
     );
     private static final List<String> OBJECTIVE_SECTION_STOP_KEYWORDS = List.of(
-        "课程内容", "教学内容", "教学安排", "教学进度", "考核方式", "成绩构成", "评分标准",
+        "课程内容", "课程教学内容", "教学内容", "教学内容设置", "教学安排", "教学进度", "考核方式", "成绩构成", "评分标准",
         "教材", "参考书", "毕业要求", "课程思政", "assessment", "grading", "contents",
         "course content", "teaching content", "schedule"
     );
@@ -108,16 +109,16 @@ public class OutlineParseEngine {
 
     private static final Map<String, List<String>> COURSE_FIELD_ALIASES = Map.ofEntries(
         Map.entry("courseCode", List.of("课程代码", "课程编号", "课程代号", "course code")),
-        Map.entry("courseNameZh", List.of("课程名称（中文）", "课程中文名称", "中文名称", "课程名称")),
-        Map.entry("courseNameEn", List.of("课程名称（英文）", "课程英文名称", "英文名称", "course name")),
+        Map.entry("courseNameZh", List.of("课程名称（中文）", "课程名称(中文)", "课程中文名称", "中文名称", "课程名称（中/英）", "课程名称(中/英)", "课程名称")),
+        Map.entry("courseNameEn", List.of("课程名称（英文）", "课程名称(英文)", "课程英文名称", "英文名称", "course name")),
         Map.entry("courseType", List.of("课程类型", "课程性质", "课程类别")),
         Map.entry("targetStudents", List.of("授课对象", "适用对象", "适用专业", "开课对象")),
         Map.entry("teachingLanguage", List.of("授课语言", "教学语言")),
         Map.entry("collegeName", List.of("开课院系", "开课单位", "承担单位", "所属学院", "开课学院")),
-        Map.entry("hours", List.of("学时", "总学时")),
+        Map.entry("hours", List.of("课程总学时", "总学时", "学时")),
         Map.entry("credits", List.of("学分")),
         Map.entry("prerequisiteCourse", List.of("先修课程", "先修课", "前导课程")),
-        Map.entry("courseOwner", List.of("课程负责人", "负责人", "主讲教师", "任课教师"))
+        Map.entry("courseOwner", List.of("课程负责人", "负责人", "主讲教师", "任课教师", "制定人"))
     );
 
     public ParsedOutlineDraft parse(String fileName, byte[] fileBytes) {
@@ -137,16 +138,19 @@ public class OutlineParseEngine {
             throw new IllegalArgumentException("未从文件中提取到有效文本，请检查课程大纲文件内容。");
         }
 
-        CourseInfo courseInfo = extractCourseInfo(segments, fileName);
-        List<ObjectiveCandidate> objectiveCandidates = extractObjectiveCandidates(segments);
+        CourseInfo basicCourseInfo = extractCourseInfo(segments, fileName);
+        List<ObjectiveCandidate> objectiveCandidates = selectPrimaryObjectiveCandidates(extractObjectiveCandidates(segments));
         if (objectiveCandidates.isEmpty()) {
             throw new IllegalArgumentException("未识别到课程目标，请检查文档中是否包含“课程目标/教学目标/学习目标”等内容。");
         }
 
+        ObjAssessMatrix objAssessMatrix = buildObjAssessMatrix(segments);
+        applyObjectiveWeightsFromMatrix(objectiveCandidates, objAssessMatrix);
         assignObjectiveWeights(objectiveCandidates);
         List<ObjectiveDraftSuggestion> objectives = buildObjectiveSuggestions(objectiveCandidates);
 
         List<AssessCandidate> assessCandidates = extractAssessCandidates(segments);
+        alignAssessCandidatesWithMatrixNames(assessCandidates, objAssessMatrix);
         completeAssessTypes(assessCandidates);
         normalizeAssessWeights(assessCandidates);
         List<AssessItemDraftSuggestion> assessItems = assessCandidates.stream()
@@ -159,8 +163,14 @@ public class OutlineParseEngine {
                 candidate.originalText
             ))
             .toList();
-        ObjAssessMatrix objAssessMatrix = buildObjAssessMatrix(segments);
         List<ObjectiveAssessMappingSuggestion> mappings = matrixToMappings(objAssessMatrix, assessItems);
+        CourseInfo courseInfo = enrichCourseInfo(
+            basicCourseInfo,
+            extractTeachingContents(segments),
+            extractAssessmentDetails(segments, assessCandidates),
+            extractAssessmentStandards(segments),
+            extractAssessmentPolicy(segments)
+        );
 
         return new ParsedOutlineDraft(objectives, assessItems, mappings, objAssessMatrix, segments, courseInfo);
     }
@@ -176,6 +186,9 @@ public class OutlineParseEngine {
                 candidate.content,
                 prediction.type(),
                 candidate.weight,
+                defaultIfBlank(candidate.gradReqId, ""),
+                defaultIfBlank(candidate.gradReqDesc, ""),
+                defaultIfBlank(candidate.relationLevel, ""),
                 round3(confidenceScore),
                 confidenceLevel(confidenceScore),
                 candidate.originalText
@@ -306,6 +319,424 @@ public class OutlineParseEngine {
         );
     }
 
+    private CourseInfo enrichCourseInfo(
+        CourseInfo base,
+        List<TeachingContentInfo> teachingContents,
+        List<AssessmentDetail> assessmentDetails,
+        List<String> assessmentStandards,
+        AssessmentPolicy assessmentPolicy
+    ) {
+        return new CourseInfo(
+            base.courseCode(),
+            base.courseNameZh(),
+            base.courseNameEn(),
+            base.courseType(),
+            base.targetStudents(),
+            base.teachingLanguage(),
+            base.collegeName(),
+            base.hours(),
+            base.credits(),
+            base.prerequisiteCourse(),
+            base.courseOwner(),
+            teachingContents,
+            assessmentDetails,
+            assessmentStandards,
+            assessmentPolicy
+        );
+    }
+
+    private List<TeachingContentInfo> extractTeachingContents(List<SourceSegment> segments) {
+        Map<String, TeachingContentInfo> result = new LinkedHashMap<>();
+        List<LineEntry> lines = flattenLines(segments);
+        for (LineEntry entry : lines) {
+            List<String> cells = entry.cells();
+            if (cells.size() >= 3 && cells.get(0).matches("\\d+")) {
+                String title = cells.get(1);
+                if (!looksLikeTeachingContentTitle(title)) {
+                    continue;
+                }
+                String detailWindow = findTeachingDetailWindow(lines, title);
+                String method = cells.stream()
+                    .filter(cell -> containsAny(cell, List.of("讲授", "上机", "实验", "实践", "讨论")))
+                    .reduce((left, right) -> right)
+                    .orElse("");
+                Integer hours = cells.stream()
+                    .skip(2)
+                    .map(this::parseFirstInteger)
+                    .filter(value -> value != null && value > 0)
+                    .findFirst()
+                    .orElse(null);
+                int lectureHours = method.contains("上机") || method.contains("实验") ? 0 : defaultInteger(hours);
+                int practiceHours = method.contains("上机") || method.contains("实验") ? defaultInteger(hours) : 0;
+                result.putIfAbsent(normalizeForMatch(title), new TeachingContentInfo(
+                    title,
+                    lectureHours == 0 ? null : lectureHours,
+                    practiceHours == 0 ? null : practiceHours,
+                    method,
+                    defaultIfBlank(extractRelatedObjectives(entry.text()), extractRelatedObjectives(detailWindow)),
+                    extractRequirementText(detailWindow),
+                    defaultIfBlank(detailWindow, entry.text())
+                ));
+            }
+        }
+
+        if (!result.isEmpty()) {
+            return new ArrayList<>(result.values());
+        }
+
+        for (int index = 0; index < lines.size(); index++) {
+            String line = lines.get(index).text();
+            TeachingHeading heading = matchTeachingHeading(line);
+            if (heading == null) {
+                continue;
+            }
+            String window = collectLineWindow(lines, index, 8);
+            result.putIfAbsent(normalizeForMatch(heading.title()), new TeachingContentInfo(
+                heading.title(),
+                heading.hours(),
+                null,
+                heading.title().contains("实验") ? "上机" : "讲授",
+                extractRelatedObjectives(window),
+                extractRequirementText(window),
+                window
+            ));
+        }
+        return new ArrayList<>(result.values());
+    }
+
+    private String findTeachingDetailWindow(List<LineEntry> lines, String title) {
+        String target = normalizeTeachingTitle(title);
+        if (!StringUtils.hasText(target)) {
+            return "";
+        }
+        boolean targetIsExperiment = sanitizeText(title).startsWith("实验");
+        for (int index = 0; index < lines.size(); index++) {
+            TeachingHeading heading = matchTeachingHeading(lines.get(index).text());
+            if (heading == null) {
+                continue;
+            }
+            boolean headingIsExperiment = sanitizeText(heading.title()).startsWith("实验");
+            if (targetIsExperiment != headingIsExperiment) {
+                continue;
+            }
+            String current = normalizeTeachingTitle(heading.title());
+            if (current.equals(target) || current.contains(target) || target.contains(current)) {
+                return collectTeachingBlock(lines, index);
+            }
+        }
+        return "";
+    }
+
+    private String collectTeachingBlock(List<LineEntry> lines, int startIndex) {
+        StringBuilder builder = new StringBuilder();
+        int start = Math.max(0, startIndex - 1);
+        for (int index = start; index < lines.size(); index++) {
+            if (index > startIndex) {
+                TeachingHeading nextHeading = matchTeachingHeading(lines.get(index).text());
+                if (nextHeading != null || looksLikeHeading(lines.get(index).text(), List.of("教学安排及教学方式", "考核要求与成绩评定"))) {
+                    break;
+                }
+            }
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append(lines.get(index).text());
+        }
+        return builder.toString();
+    }
+
+    private List<AssessmentDetail> extractAssessmentDetails(List<SourceSegment> segments, List<AssessCandidate> candidates) {
+        List<LineEntry> lines = flattenLines(segments);
+        Map<String, AssessmentDetailBlock> blocksByType = extractAssessmentDetailBlocks(lines);
+        List<AssessmentDetail> result = new ArrayList<>();
+        for (AssessCandidate candidate : candidates) {
+            AssessmentDetailBlock block = blocksByType.get(candidate.type);
+            if (block != null) {
+                result.add(new AssessmentDetail(
+                    candidate.name,
+                    round2(candidate.weight),
+                    block.content(),
+                    block.evaluationMethod(),
+                    block.supports(),
+                    block.originalText()
+                ));
+                continue;
+            }
+            int index = findAssessmentLineIndex(lines, candidate);
+            String window = index >= 0 ? collectLineWindow(lines, index, 12) : candidate.originalText;
+            result.add(new AssessmentDetail(
+                candidate.name,
+                round2(candidate.weight),
+                extractBetweenLabels(window, List.of("考核内容及方式", "考核内容", "方式"), List.of("评价办法", "支撑", "考核方式", "是否设置补考")),
+                extractBetweenLabels(window, List.of("评价办法"), List.of("支撑", "考核方式", "是否设置补考")),
+                extractSupportText(window),
+                window
+            ));
+        }
+        return result;
+    }
+
+    private Map<String, AssessmentDetailBlock> extractAssessmentDetailBlocks(List<LineEntry> lines) {
+        Map<String, MutableAssessmentDetailBlock> blocks = new LinkedHashMap<>();
+        MutableAssessmentDetailBlock current = null;
+        for (LineEntry line : lines) {
+            List<String> cells = line.cells();
+            if (cells.isEmpty()) {
+                continue;
+            }
+
+            AssessKeywordRule headingRule = assessRuleForHeaderToken(cells.get(0));
+            boolean startsBlock = headingRule != null
+                && containsAny(cells.get(0), List.of("评定", "考核", "成绩"))
+                && containsAny(line.text(), List.of("权重", "%", "％", "占课程最终成绩"));
+            if (startsBlock) {
+                current = new MutableAssessmentDetailBlock(headingRule.type(), headingRule.name());
+                current.weight = firstWeightValue(cells, line.text());
+                current.appendOriginal(line.text());
+                blocks.putIfAbsent(current.type, current);
+                current = blocks.get(current.type);
+                continue;
+            }
+
+            if (current == null) {
+                continue;
+            }
+
+            String label = normalizeForMatch(cells.get(0));
+            String value = cells.size() >= 2
+                ? String.join(" ", cells.subList(1, cells.size()))
+                : line.text();
+            if (label.contains("考核内容") || label.contains("考核方式")) {
+                current.content = defaultIfBlank(current.content, sanitizeText(value));
+                current.appendOriginal(line.text());
+            } else if (label.contains("评价办法")) {
+                current.evaluationMethod = defaultIfBlank(current.evaluationMethod, sanitizeText(value));
+                current.appendOriginal(line.text());
+            } else if (label.equals("支撑") || label.contains("支撑毕业要求")) {
+                current.supports = defaultIfBlank(current.supports, sanitizeText(value));
+                current.appendOriginal(line.text());
+            } else if (label.contains("是否设置补考") || label.contains("考核方式") && containsAny(line.text(), List.of("是否设置补考"))) {
+                current = null;
+            }
+        }
+
+        Map<String, AssessmentDetailBlock> result = new LinkedHashMap<>();
+        for (MutableAssessmentDetailBlock block : blocks.values()) {
+            result.put(block.type, new AssessmentDetailBlock(
+                block.name,
+                block.type,
+                block.weight,
+                defaultIfBlank(block.content, ""),
+                defaultIfBlank(block.evaluationMethod, ""),
+                defaultIfBlank(block.supports, ""),
+                block.originalText.toString()
+            ));
+        }
+        return result;
+    }
+
+    private List<String> extractAssessmentStandards(List<SourceSegment> segments) {
+        List<LineEntry> lines = flattenLines(segments);
+        List<String> result = new ArrayList<>();
+        boolean inStandardSection = false;
+        for (LineEntry line : lines) {
+            String text = line.text();
+            if (containsAny(text, List.of("考核与评价标准", "评价标准表", "评分标准表"))) {
+                inStandardSection = true;
+            }
+            if (!inStandardSection) {
+                continue;
+            }
+            if (looksLikeHeading(text, List.of("教材", "参考书", "课程资源", "大纲制定"))) {
+                break;
+            }
+            if (containsAny(text, List.of("评价标准", "优秀", "良好", "中等", "合格", "不合格", "课程目标"))) {
+                result.add(text);
+            }
+            if (result.size() >= 24) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private AssessmentPolicy extractAssessmentPolicy(List<SourceSegment> segments) {
+        String scoreRecordMode = "";
+        String finalGradeComposition = "";
+        String assessmentMode = "";
+        String makeupExam = "";
+        StringBuilder originalText = new StringBuilder();
+
+        for (LineEntry line : flattenLines(segments)) {
+            List<String> cells = line.cells();
+            if (cells.size() < 2) {
+                continue;
+            }
+
+            for (int index = 0; index + 1 < cells.size(); index += 2) {
+                String label = normalizeForMatch(cells.get(index));
+                String value = sanitizeText(cells.get(index + 1));
+                if (!StringUtils.hasText(value)) {
+                    continue;
+                }
+
+                if (label.contains("课程最终成绩记载方式") || label.contains("成绩记载方式")) {
+                    scoreRecordMode = defaultIfBlank(scoreRecordMode, value);
+                    appendLine(originalText, line.text());
+                } else if (label.contains("课程最终成绩组成") || label.contains("成绩组成")) {
+                    finalGradeComposition = defaultIfBlank(finalGradeComposition, value);
+                    appendLine(originalText, line.text());
+                } else if (label.equals("考核方式") || label.contains("课程考核方式")) {
+                    assessmentMode = defaultIfBlank(assessmentMode, value);
+                    appendLine(originalText, line.text());
+                } else if (label.contains("是否设置补考") || label.contains("补考")) {
+                    makeupExam = defaultIfBlank(makeupExam, value);
+                    appendLine(originalText, line.text());
+                }
+            }
+        }
+
+        return new AssessmentPolicy(
+            scoreRecordMode,
+            finalGradeComposition,
+            assessmentMode,
+            makeupExam,
+            originalText.toString()
+        );
+    }
+
+    private void appendLine(StringBuilder builder, String text) {
+        if (!StringUtils.hasText(text)) {
+            return;
+        }
+        if (builder.toString().contains(text)) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append(text);
+    }
+
+    private boolean looksLikeTeachingContentTitle(String text) {
+        if (!StringUtils.hasText(text) || containsAny(text, List.of("课程内容", "合计", "序号", "教学方式"))) {
+            return false;
+        }
+        String normalized = sanitizeText(text);
+        return normalized.matches("^[（(][一二三四五六七八九十]+[）)].+")
+            || normalized.startsWith("实验")
+            || containsAny(normalized, List.of("系统", "用户界面", "HTTP", "Servlet", "Ajax", "Web", "数据", "控件", "案例"));
+    }
+
+    private String normalizeTeachingTitle(String text) {
+        String normalized = sanitizeText(text);
+        normalized = normalized.replaceAll("[（(]\\s*\\d+\\s*学时\\s*[）)]", "");
+        normalized = normalized.replaceAll("[,，]\\s*\\d+\\s*学时\\s*$", "");
+        normalized = normalized.replaceAll("^[（(]?[一二三四五六七八九十]+[）)]", "");
+        return normalizeForMatch(normalized);
+    }
+
+    private Integer parseFirstInteger(String text) {
+        Matcher matcher = Pattern.compile("\\d+").matcher(defaultIfBlank(text, ""));
+        return matcher.find() ? Integer.parseInt(matcher.group()) : null;
+    }
+
+    private int defaultInteger(Integer value) {
+        return value == null ? 0 : value;
+    }
+
+    private String extractRelatedObjectives(String text) {
+        Matcher matcher = Pattern.compile("课程目标\\s*([0-9一二三四五六七八九十、,，\\s]+)").matcher(defaultIfBlank(text, ""));
+        return matcher.find() ? "课程目标" + matcher.group(1).trim() : "";
+    }
+
+    private TeachingHeading matchTeachingHeading(String text) {
+        String normalized = defaultIfBlank(text, "");
+        Matcher section = Pattern.compile("^[（(][一二三四五六七八九十]+[）)]\\s*(.+?)[（(]\\s*(\\d+)\\s*学时\\s*[）)]").matcher(normalized);
+        if (section.find()) {
+            return new TeachingHeading(section.group(1).trim(), Integer.parseInt(section.group(2)));
+        }
+        Matcher experiment = Pattern.compile("^(实验[一二三四五六七八九十]+[:：].+?)[（(]\\s*(\\d+)\\s*学时\\s*[）)]").matcher(normalized);
+        if (experiment.find()) {
+            return new TeachingHeading(experiment.group(1).trim(), Integer.parseInt(experiment.group(2)));
+        }
+        Matcher looseExperiment = Pattern.compile("^(实验[一二三四五六七八九十]+[:：].+?)[,，]\\s*(\\d+)\\s*学时").matcher(normalized);
+        if (looseExperiment.find()) {
+            return new TeachingHeading(looseExperiment.group(1).trim(), Integer.parseInt(looseExperiment.group(2)));
+        }
+        return null;
+    }
+
+    private String collectLineWindow(List<LineEntry> lines, int centerIndex, int radius) {
+        int start = Math.max(0, centerIndex - 1);
+        int end = Math.min(lines.size() - 1, centerIndex + radius);
+        StringBuilder builder = new StringBuilder();
+        for (int i = start; i <= end; i++) {
+            if (builder.length() > 0) {
+                builder.append("\n");
+            }
+            builder.append(lines.get(i).text());
+        }
+        return builder.toString();
+    }
+
+    private String extractRequirementText(String text) {
+        Matcher matcher = Pattern.compile("(?s)(?:^|\\n)\\s*1[.．、]?\\s*基本要求\\s*(.+?)(?=\\n\\s*2[.．、]?\\s*重点|\\n\\s*重点[:：]|\\n\\s*2[.．、]?\\s*重点、难点|\\n\\s*3[.．、]?\\s*作业|$)")
+            .matcher(defaultIfBlank(text, ""));
+        if (matcher.find()) {
+            return sanitizeText(matcher.group(1));
+        }
+        String value = extractBetweenLabels(text, List.of("基本要求"), List.of("重点", "难点", "作业", "课外学习要求"));
+        return defaultIfBlank(value, "");
+    }
+
+    private int findAssessmentLineIndex(List<LineEntry> lines, AssessCandidate candidate) {
+        List<String> keywords = switch (candidate.type) {
+            case "normal" -> List.of("平时", "作业", "课堂");
+            case "practice" -> List.of("实验", "实践", "项目");
+            case "final" -> List.of("结业", "期末", "综合报告", "考试");
+            case "mid" -> List.of("期中");
+            default -> List.of(candidate.name);
+        };
+        for (int i = 0; i < lines.size(); i++) {
+            String text = lines.get(i).text();
+            if (containsAny(text, keywords) && containsAny(collectLineWindow(lines, i, 4), List.of("权重", "考核内容", "评价办法", "支撑"))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private String extractBetweenLabels(String text, List<String> starts, List<String> ends) {
+        String normalized = defaultIfBlank(text, "");
+        int start = -1;
+        String matchedStart = "";
+        for (String label : starts) {
+            int index = normalized.indexOf(label);
+            if (index >= 0 && (start < 0 || index < start)) {
+                start = index;
+                matchedStart = label;
+            }
+        }
+        if (start < 0) {
+            return "";
+        }
+        start += matchedStart.length();
+        int end = normalized.length();
+        for (String label : ends) {
+            int index = normalized.indexOf(label, start);
+            if (index >= 0 && index < end) {
+                end = index;
+            }
+        }
+        return sanitizeText(normalized.substring(start, end));
+    }
+
+    private String extractSupportText(String text) {
+        Matcher matcher = Pattern.compile("支撑毕业要求[0-9.、，,\\s]+").matcher(defaultIfBlank(text, ""));
+        return matcher.find() ? sanitizeText(matcher.group()) : "";
+    }
+
     private void collectCourseInfoFromText(String text, Map<String, String> values) {
         if (!StringUtils.hasText(text)) {
             return;
@@ -343,6 +774,26 @@ public class OutlineParseEngine {
             return;
         }
 
+        if ("courseType".equals(field)) {
+            value = normalizeCourseTypeValue(value);
+            String existing = values.get(field);
+            if (StringUtils.hasText(existing)) {
+                if (looksLikeCheckboxCourseType(existing) && !looksLikeCheckboxCourseType(value)) {
+                    values.put(field, value);
+                }
+                return;
+            }
+        }
+
+        if ("courseNameZh".equals(field)) {
+            CourseNameParts parts = splitCourseName(value);
+            if (parts != null) {
+                values.putIfAbsent("courseNameZh", parts.zh());
+                values.putIfAbsent("courseNameEn", parts.en());
+                return;
+            }
+        }
+
         if ("courseCode".equals(field) && containsAny(value, COURSE_FIELD_ALIASES.values().stream().flatMap(List::stream).toList())) {
             return;
         }
@@ -361,6 +812,44 @@ public class OutlineParseEngine {
         }
 
         values.putIfAbsent(field, value);
+    }
+
+    private String normalizeCourseTypeValue(String value) {
+        String normalized = sanitizeText(value);
+        if (!looksLikeCheckboxCourseType(normalized)) {
+            return normalized;
+        }
+        String[] parts = normalized.split("[□☐]");
+        for (String part : parts) {
+            if (part.contains("☑") || part.contains("■") || part.contains("√") || part.contains("✓")) {
+                return sanitizeText(part.replaceAll("[☑■√✓…\\.]+", ""));
+            }
+        }
+        return normalized.replaceAll("[□☐☑■√✓…]+", " ").trim();
+    }
+
+    private boolean looksLikeCheckboxCourseType(String value) {
+        return StringUtils.hasText(value) && value.matches(".*[□☐☑■√✓].*");
+    }
+
+    private CourseNameParts splitCourseName(String value) {
+        String normalized = sanitizeText(value);
+        String[] parts = normalized.split("\\s*/\\s*|\\s+／\\s+", 2);
+        if (parts.length != 2) {
+            return null;
+        }
+        String left = sanitizeText(parts[0]);
+        String right = sanitizeText(parts[1]);
+        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+            return null;
+        }
+        if (containsChinese(left) && !containsChinese(right)) {
+            return new CourseNameParts(left, right);
+        }
+        if (!containsChinese(left) && containsChinese(right)) {
+            return new CourseNameParts(right, left);
+        }
+        return null;
     }
 
     private void collectSplitHoursCredits(List<SourceSegment> segments, Map<String, String> values) {
@@ -495,7 +984,7 @@ public class OutlineParseEngine {
 
             if (looksLikeStandaloneObjective(line)) {
                 current = flushObjective(current, candidates, uniqueContents);
-                current = new ObjectiveAccumulator(null, sanitizeObjectiveContent(line), line, entry.sortOrder());
+                current = new ObjectiveAccumulator(null, sanitizeObjectiveContent(line), line, entry.sortOrder(), "", "", "");
                 current = flushObjective(current, candidates, uniqueContents);
             }
         }
@@ -503,6 +992,14 @@ public class OutlineParseEngine {
         flushObjective(current, candidates, uniqueContents);
         candidates.sort(Comparator.comparingInt(ObjectiveCandidate::sortOrder));
         return candidates;
+    }
+
+    private List<ObjectiveCandidate> selectPrimaryObjectiveCandidates(List<ObjectiveCandidate> candidates) {
+        List<ObjectiveCandidate> relationTableCandidates = candidates.stream()
+            .filter(candidate -> StringUtils.hasText(candidate.rawNumber))
+            .filter(candidate -> looksLikeObjectiveRelationRow(splitCells(candidate.originalText)))
+            .toList();
+        return relationTableCandidates.size() >= 2 ? relationTableCandidates : candidates;
     }
 
     private ObjectiveAccumulator processObjectiveLine(
@@ -521,7 +1018,7 @@ public class OutlineParseEngine {
 
         if (looksLikeStandaloneObjective(normalized)) {
             current = flushObjective(current, candidates, uniqueContents);
-            return new ObjectiveAccumulator(null, sanitizeObjectiveContent(normalized), normalized, sortOrder);
+            return new ObjectiveAccumulator(null, sanitizeObjectiveContent(normalized), normalized, sortOrder, "", "", "");
         }
 
         if (current != null && shouldAppendToObjective(normalized)) {
@@ -537,7 +1034,10 @@ public class OutlineParseEngine {
             match.rawNumber(),
             sanitizeObjectiveContent(match.content()),
             sanitizeText(originalText),
-            sortOrder
+            sortOrder,
+            match.relationLevel(),
+            match.gradReqId(),
+            match.gradReqDesc()
         );
         if (match.explicitWeight() != null) {
             acc.setExplicitWeight(match.explicitWeight());
@@ -573,6 +1073,9 @@ public class OutlineParseEngine {
             true,
             current.sortOrder(),
             explicitWeight,
+            current.gradReqId(),
+            current.gradReqDesc(),
+            current.relationLevel(),
             explicitWeight == null ? 0D : explicitWeight
         ));
         uniqueContents.add(uniqueKey);
@@ -602,8 +1105,6 @@ public class OutlineParseEngine {
                 continue;
             }
 
-            collectAssessItemsFromCells(cells, items);
-
             if (isAssessSectionStart(line)) {
                 inAssessSection = true;
             }
@@ -621,17 +1122,22 @@ public class OutlineParseEngine {
                 continue;
             }
 
+            collectAssessItemsFromCells(cells, items);
+
             boolean anyRuleMatched = false;
             for (AssessKeywordRule rule : ASSESS_KEYWORD_RULES) {
+                if (shouldSkipAssessRuleForLine(rule, line)) {
+                    continue;
+                }
                 Double weight = extractAssessWeight(line, rule.keywords());
                 if (weight == null) {
                     continue;
                 }
 
                 anyRuleMatched = true;
-                AssessCandidate existing = items.get(rule.name());
+                AssessCandidate existing = findAssessCandidateByType(items, rule.type());
                 if (existing == null) {
-                    items.put(rule.name(), new AssessCandidate(rule.name(), rule.type(), weight, 0.9D, line));
+                    putAssessCandidate(items, new AssessCandidate(rule.name(), rule.type(), weight, 0.9D, line));
                 } else {
                     existing.weight = weight;
                     existing.confidenceScore = Math.max(existing.confidenceScore, 0.92D);
@@ -664,7 +1170,7 @@ public class OutlineParseEngine {
             String cell = cells.get(i).trim();
             String stripped = cell.replaceAll("[\\d.%％]+", "").replaceAll("[\\s,]+", "");
             if (!cell.isEmpty() && stripped.isEmpty()) {
-                Double w = extractPercentWeight(cell);
+                Double w = extractPercentOrPlainWeight(cell);
                 if (w != null && Math.abs(w - 100) > 0.01) {
                     rowLevelPct = w;
                     break;
@@ -675,9 +1181,12 @@ public class OutlineParseEngine {
         if (rowLevelPct != null) {
             String merged = String.join(" | ", cells);
             for (AssessKeywordRule rule : ASSESS_KEYWORD_RULES) {
+                if (shouldSkipAssessRuleForLine(rule, merged)) {
+                    continue;
+                }
                 for (String cell : cells) {
                     if (containsAny(cell, rule.keywords())) {
-                        items.put(rule.name(), new AssessCandidate(rule.name(), rule.type(), rowLevelPct, 0.95D, merged));
+                        putAssessCandidate(items, new AssessCandidate(rule.name(), rule.type(), rowLevelPct, 0.95D, merged));
                         break;
                     }
                 }
@@ -692,6 +1201,9 @@ public class OutlineParseEngine {
             String merged = left + " " + right;
 
             for (AssessKeywordRule rule : ASSESS_KEYWORD_RULES) {
+                if (shouldSkipAssessRuleForLine(rule, merged)) {
+                    continue;
+                }
                 if (!containsAny(left, rule.keywords()) && !containsAny(merged, rule.keywords())) {
                     continue;
                 }
@@ -702,14 +1214,44 @@ public class OutlineParseEngine {
                 if (weight == null) {
                     continue;
                 }
-                items.put(rule.name(), new AssessCandidate(rule.name(), rule.type(), weight, 0.95D, merged));
+                putAssessCandidate(items, new AssessCandidate(rule.name(), rule.type(), weight, 0.95D, merged));
             }
         }
+    }
+
+    private boolean shouldSkipAssessRuleForLine(AssessKeywordRule rule, String line) {
+        if ("report".equals(rule.type()) && containsAny(line, List.of("期末", "结业", "考试", "测试"))) {
+            return true;
+        }
+        if ("practice".equals(rule.type()) && containsAny(line, List.of("综合实验报告", "实验报告"))) {
+            return true;
+        }
+        return false;
     }
 
     private Double extractPercentWeight(String text) {
         Matcher matcher = PERCENT_WEIGHT_PATTERN.matcher(text);
         return matcher.find() ? Double.parseDouble(matcher.group(1)) : null;
+    }
+
+    private Double extractPercentOrPlainWeight(String text) {
+        Double percent = extractPercentWeight(text);
+        if (percent != null) {
+            return percent;
+        }
+        String normalized = sanitizeText(text);
+        return normalized.matches("\\d+(?:\\.\\d+)?") ? Double.parseDouble(normalized) : null;
+    }
+
+    private Double firstWeightValue(List<String> cells, String text) {
+        for (String cell : cells) {
+            Double value = extractPercentOrPlainWeight(cell);
+            if (value != null && Math.abs(value - 100D) > 0.01D) {
+                return value;
+            }
+        }
+        List<Double> weights = extractAllWeights(text);
+        return weights.isEmpty() ? null : weights.get(0);
     }
 
     private void collectGenericAssessItems(String text, Map<String, AssessCandidate> items) {
@@ -728,14 +1270,32 @@ public class OutlineParseEngine {
         }
 
         if (!items.containsKey("平时成绩") && weights.size() >= 1) {
-            items.put("平时成绩", new AssessCandidate("平时成绩", "normal", weights.get(0), 0.55D, text));
+            putAssessCandidate(items, new AssessCandidate("平时成绩", "normal", weights.get(0), 0.55D, text));
         }
         if (!items.containsKey("期中成绩") && weights.size() >= 2) {
-            items.put("期中成绩", new AssessCandidate("期中成绩", "mid", weights.get(1), 0.55D, text));
+            putAssessCandidate(items, new AssessCandidate("期中成绩", "mid", weights.get(1), 0.55D, text));
         }
         if (!items.containsKey("期末成绩") && weights.size() >= 3) {
-            items.put("期末成绩", new AssessCandidate("期末成绩", "final", weights.get(2), 0.55D, text));
+            putAssessCandidate(items, new AssessCandidate("期末成绩", "final", weights.get(2), 0.55D, text));
         }
+    }
+
+    private void putAssessCandidate(Map<String, AssessCandidate> items, AssessCandidate candidate) {
+        AssessCandidate sameType = findAssessCandidateByType(items, candidate.type);
+        if (sameType != null) {
+            if (sameType.confidenceScore >= candidate.confidenceScore) {
+                return;
+            }
+            items.entrySet().removeIf(entry -> entry.getValue() == sameType);
+        }
+        items.put(candidate.name, candidate);
+    }
+
+    private AssessCandidate findAssessCandidateByType(Map<String, AssessCandidate> items, String type) {
+        return items.values().stream()
+            .filter(candidate -> candidate.type.equals(type))
+            .findFirst()
+            .orElse(null);
     }
 
     private Double extractAssessWeight(String text, List<String> keywords) {
@@ -772,6 +1332,15 @@ public class OutlineParseEngine {
     }
 
     private boolean isObjectiveSectionStop(String text) {
+        String normalized = normalizeForMatch(text);
+        if (sanitizeText(text).matches("^[一二三四五六七八九十]+[、.．].+")
+            && !containsAny(text, OBJECTIVE_SECTION_KEYWORDS)) {
+            return true;
+        }
+        if (containsAny(normalized, List.of("课程教学内容设置", "课程教学内容及基本要求", "课程教学内容", "教学安排及教学方式",
+            "考核要求与成绩评定", "考核与评价标准", "学生学习建议", "课外阅读参考资料"))) {
+            return true;
+        }
         return looksLikeHeading(text, OBJECTIVE_SECTION_STOP_KEYWORDS);
     }
 
@@ -807,6 +1376,13 @@ public class OutlineParseEngine {
             return true;
         }
         if (Pattern.compile("\\d+\\s*-\\s*\\d+\\s*分").matcher(text).find()) {
+            return true;
+        }
+        List<String> cells = splitCells(text);
+        if (cells.size() >= 5 && containsAny(cells.get(0), List.of("课程目标", "目标"))) {
+            return true;
+        }
+        if (containsAny(text, List.of("优秀", "良好", "中等", "合格", "不合格", "评价标准表", "评分标准表"))) {
             return true;
         }
         return containsAny(text, ASSESS_NOISE_KEYWORDS);
@@ -894,11 +1470,22 @@ public class OutlineParseEngine {
             if (headingMatch == null) {
                 continue;
             }
+            if (cells.size() >= 4 && !looksLikeObjectiveRelationRow(cells)) {
+                continue;
+            }
             String content = sanitizeObjectiveContent(cells.get(index + 1));
             if (!StringUtils.hasText(content)) {
                 continue;
             }
-            return new ObjectiveLineMatch(headingMatch.rawNumber(), content);
+            String relationLevel = "";
+            String gradReqId = "";
+            String gradReqDesc = "";
+            if (looksLikeObjectiveRelationRow(cells)) {
+                relationLevel = extractRelationLevel(cells);
+                gradReqId = extractGradReqId(cells);
+                gradReqDesc = extractGradReqDesc(cells);
+            }
+            return new ObjectiveLineMatch(headingMatch.rawNumber(), content, null, relationLevel, gradReqId, gradReqDesc);
         }
 
         // Grade composition table row: [number, content_text, pct1?, pct2?, ..., total_pct]
@@ -926,6 +1513,54 @@ public class OutlineParseEngine {
         }
 
         return null;
+    }
+
+    private boolean looksLikeObjectiveRelationRow(List<String> cells) {
+        if (cells.size() < 4) {
+            return false;
+        }
+        String relation = sanitizeText(cells.get(2));
+        String gradReq = sanitizeText(cells.get(3));
+        return relation.matches("(?i)[HML]")
+            || gradReq.matches("\\d+(?:\\.\\d+)+")
+            || containsAny(String.join(" ", cells), List.of("毕业要求", "关联程度"));
+    }
+
+    private String extractRelationLevel(List<String> cells) {
+        for (String cell : cells) {
+            String value = sanitizeText(cell).toUpperCase(Locale.ROOT);
+            if (value.matches("[HML]")) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String extractGradReqId(List<String> cells) {
+        for (String cell : cells) {
+            Matcher matcher = Pattern.compile("\\b\\d+(?:\\.\\d+)+\\b").matcher(sanitizeText(cell));
+            if (matcher.find()) {
+                return matcher.group();
+            }
+        }
+        return "";
+    }
+
+    private String extractGradReqDesc(List<String> cells) {
+        String gradReqId = extractGradReqId(cells);
+        for (int index = 0; index < cells.size(); index++) {
+            String cell = sanitizeText(cells.get(index));
+            if (!StringUtils.hasText(cell) || cell.equalsIgnoreCase(extractRelationLevel(cells)) || cell.equals(gradReqId)) {
+                continue;
+            }
+            if (cell.contains("毕业要求") && cell.length() <= 16) {
+                continue;
+            }
+            if (index >= 4 && cell.length() >= 8) {
+                return cell;
+            }
+        }
+        return "";
     }
 
     // Detect linearized grade-table rows in PDF text:
@@ -970,20 +1605,87 @@ public class OutlineParseEngine {
     // Returns matched AssessKeywordRule names for a row that looks like assess-method column headers.
     // A header row has 2+ assess-keyword cells but no percentage values.
     private List<String> detectAssessMethodHeaders(List<String> cells, String text) {
-        if (WEIGHT_PATTERN.matcher(text).find()) {
+        if (WEIGHT_PATTERN.matcher(text).find() || looksLikeNumericWeightRow(cells, text)) {
             return new ArrayList<>();
         }
+        List<String> matchedRuleNames = assessHeaderNamesInOrder(cells, text);
+        return matchedRuleNames.size() >= 2 ? matchedRuleNames : new ArrayList<>();
+    }
+
+    private List<String> assessHeaderNamesInOrder(List<String> cells, String text) {
         List<String> matchedRuleNames = new ArrayList<>();
         List<String> tokens = cells.size() >= 2 ? cells : List.of(text.split("\\s{2,}"));
+        Set<String> usedTypes = new LinkedHashSet<>();
+        for (String token : tokens) {
+            AssessKeywordRule rule = assessRuleForHeaderToken(token);
+            if (rule == null || usedTypes.contains(rule.type())) {
+                continue;
+            }
+            matchedRuleNames.add(normalizeAssessDisplayName(token, rule));
+            usedTypes.add(rule.type());
+        }
+        return matchedRuleNames;
+    }
+
+    private String normalizeAssessDisplayName(String token, AssessKeywordRule rule) {
+        String value = sanitizeText(token)
+            .replaceAll("(?i)\\bassessment\\b", "")
+            .replaceAll("成绩比例.*$", "")
+            .replaceAll("考核方式及成绩比例.*$", "")
+            .replaceAll("占课程最终成绩.*$", "")
+            .replaceAll("评定$", "")
+            .replaceAll("成绩$", "")
+            .replaceAll("[()（）%％]", "")
+            .trim();
+        value = WHITESPACE_PATTERN.matcher(value).replaceAll("");
+        if (!StringUtils.hasText(value) || value.length() > 24 || containsAny(value, List.of("课程目标", "支撑毕业要求", "合计"))) {
+            return rule.name();
+        }
+        if ("normal".equals(rule.type()) && value.equals("平时")) {
+            return "平时成绩";
+        }
+        if ("practice".equals(rule.type()) && value.equals("实验")) {
+            return "实验项目";
+        }
+        if ("final".equals(rule.type()) && value.equals("期末")) {
+            return "期末成绩";
+        }
+        return value;
+    }
+
+    private AssessKeywordRule assessRuleForHeaderToken(String token) {
+        String normalized = normalizeForMatch(token);
+        if (!StringUtils.hasText(normalized)) {
+            return null;
+        }
+        if (containsAny(token, List.of("平时", "课堂", "作业", "regular", "assignment", "quiz"))) {
+            return assessRuleByType("normal");
+        }
+        if (containsAny(token, List.of("期中", "midterm"))) {
+            return assessRuleByType("mid");
+        }
+        if (containsAny(token, List.of("期末", "结业", "测试", "考试", "final"))) {
+            return assessRuleByType("final");
+        }
+        if (containsAny(token, List.of("实验项目", "实践项目", "课程设计", "上机", "项目", "practice", "lab", "project"))) {
+            return assessRuleByType("practice");
+        }
+        if (containsAny(token, List.of("报告", "汇报", "presentation", "report"))) {
+            return assessRuleByType("report");
+        }
         for (AssessKeywordRule rule : ASSESS_KEYWORD_RULES) {
-            for (String token : tokens) {
-                if (containsAny(token, rule.keywords()) && !matchedRuleNames.contains(rule.name())) {
-                    matchedRuleNames.add(rule.name());
-                    break;
-                }
+            if (containsAny(token, rule.keywords())) {
+                return rule;
             }
         }
-        return matchedRuleNames.size() >= 2 ? matchedRuleNames : new ArrayList<>();
+        return null;
+    }
+
+    private AssessKeywordRule assessRuleByType(String type) {
+        return ASSESS_KEYWORD_RULES.stream()
+            .filter(rule -> rule.type().equals(type))
+            .findFirst()
+            .orElse(null);
     }
 
     private ObjAssessMatrix buildObjAssessMatrix(List<SourceSegment> segments) {
@@ -1014,7 +1716,8 @@ public class OutlineParseEngine {
             }
 
             // Sub-header row: no objective number, may have assess method column names
-            if (cells.isEmpty() || !cells.get(0).trim().matches("\\d{1,2}")) {
+            Integer objNum = cells.isEmpty() ? null : parseObjectiveNumberCell(cells.get(0));
+            if (objNum == null) {
                 List<String> detected = detectMappingColumnHeaders(cells, line);
                 if (!detected.isEmpty()) {
                     methodNames = new ArrayList<>(detected);
@@ -1023,13 +1726,6 @@ public class OutlineParseEngine {
                 continue;
             }
 
-            // Data row: first cell is objective number
-            int objNum;
-            try {
-                objNum = Integer.parseInt(cells.get(0).trim());
-            } catch (NumberFormatException e) {
-                continue;
-            }
             if (objNum < 1 || objNum > 20 || methodNames.isEmpty()) continue;
 
             // Collect pure-percentage cells only (skip text content cells)
@@ -1038,17 +1734,29 @@ public class OutlineParseEngine {
                 String cell = cells.get(i).trim();
                 String stripped = cell.replaceAll("[\\d.%％]+", "").replaceAll("[\\s,]+", "");
                 if (!cell.isEmpty() && stripped.isEmpty()) {
-                    Double pct = extractPercentWeight(cell);
+                    Double pct = extractPercentOrPlainWeight(cell);
                     if (pct != null) percentages.add(pct);
                 }
             }
 
-            if (percentages.size() < methodNames.size()) continue;
+            if (percentages.isEmpty()) continue;
 
-            // If there are more percentages than method columns, the last one is the total weight
-            Double totalWeight = percentages.size() > methodNames.size()
-                ? percentages.get(percentages.size() - 1) : null;
-            List<Double> proportions = new ArrayList<>(percentages.subList(0, methodNames.size()));
+            Double totalWeight = null;
+            List<Double> proportions;
+            if (percentages.size() >= methodNames.size() + 1) {
+                totalWeight = percentages.get(percentages.size() - 1);
+                proportions = new ArrayList<>(percentages.subList(0, methodNames.size()));
+            } else if (percentages.size() >= 2 && percentages.size() < methodNames.size() + 1) {
+                totalWeight = percentages.get(percentages.size() - 1);
+                proportions = new ArrayList<>(percentages.subList(0, percentages.size() - 1));
+                while (proportions.size() < methodNames.size()) {
+                    proportions.add(0, 0D);
+                }
+            } else if (percentages.size() == methodNames.size()) {
+                proportions = new ArrayList<>(percentages);
+            } else {
+                continue;
+            }
 
             rows.add(new ObjAssessMatrixRow("OBJ-" + objNum, objNum, proportions, totalWeight));
         }
@@ -1060,13 +1768,62 @@ public class OutlineParseEngine {
 
     private boolean isMappingTableHeader(String line) {
         String nm = normalizeForMatch(line);
-        return nm.contains("课程目标") && (nm.contains("各考核方式") || nm.contains("考核方式中的比例"));
+        return nm.contains("课程目标")
+            && nm.contains("考核方式")
+            && (nm.contains("成绩比例") || nm.contains("成绩评定") || nm.contains("支撑毕业要求")
+                || nm.contains("各考核方式") || nm.contains("考核方式中的比例"));
     }
 
     private List<String> detectMappingColumnHeaders(List<String> cells, String line) {
-        if (PERCENT_WEIGHT_PATTERN.matcher(line).find()) {
+        if (PERCENT_WEIGHT_PATTERN.matcher(line).find() || looksLikeNumericWeightRow(cells, line)) {
             return new ArrayList<>();
         }
+        return assessHeaderNamesInOrder(cells, line);
+    }
+
+    private Integer parseObjectiveNumberCell(String text) {
+        Matcher matcher = Pattern.compile("^(?:课程目标|教学目标|目标|OBJ-?)?\\s*([0-9一二三四五六七八九十]+)\\s*$", Pattern.CASE_INSENSITIVE)
+            .matcher(sanitizeText(text));
+        if (!matcher.find()) {
+            return null;
+        }
+        String raw = matcher.group(1);
+        if (raw.matches("\\d+")) {
+            return Integer.parseInt(raw);
+        }
+        return chineseNumberToInt(raw);
+    }
+
+    private boolean looksLikeNumericWeightRow(List<String> cells, String text) {
+        if (cells.size() < 2) {
+            return false;
+        }
+        int numericCount = 0;
+        for (String cell : cells) {
+            if (extractPercentOrPlainWeight(cell) != null) {
+                numericCount++;
+            }
+        }
+        return numericCount >= 2 && !containsAny(text, STRONG_ASSESS_KEYWORDS);
+    }
+
+    private int chineseNumberToInt(String raw) {
+        return switch (raw) {
+            case "一" -> 1;
+            case "二" -> 2;
+            case "三" -> 3;
+            case "四" -> 4;
+            case "五" -> 5;
+            case "六" -> 6;
+            case "七" -> 7;
+            case "八" -> 8;
+            case "九" -> 9;
+            case "十" -> 10;
+            default -> 0;
+        };
+    }
+
+    private List<String> detectLegacyMappingColumnHeaders(List<String> cells, String line) {
         List<String> headers = new ArrayList<>();
         List<String> tokens = cells.size() >= 2 ? cells : List.of(line.split("\\s{2,}"));
         for (String token : tokens) {
@@ -1092,9 +1849,12 @@ public class OutlineParseEngine {
         Set<String> uniqueKeys = new LinkedHashSet<>();
 
         for (ObjAssessMatrixRow row : matrix.rows()) {
+            double rowTotal = row.totalWeight() != null && row.totalWeight() > 0D
+                ? row.totalWeight()
+                : row.proportions().stream().mapToDouble(Double::doubleValue).sum();
             for (int i = 0; i < matrix.methodNames().size() && i < row.proportions().size(); i++) {
                 double proportion = row.proportions().get(i);
-                if (proportion <= 0) continue;
+                if (proportion <= 0 || rowTotal <= 0D) continue;
                 String methodName = matrix.methodNames().get(i);
                 String methodType = matrix.methodTypes().get(i);
                 AssessItemDraftSuggestion assessItem = findAssessItemForHeader(methodName, assessItems);
@@ -1107,7 +1867,7 @@ public class OutlineParseEngine {
                     row.objectiveNumber(),
                     itemName,
                     itemType,
-                    round2(proportion),
+                    round2(proportion / rowTotal * 100D),
                     round3(0.9D),
                     "HIGH",
                     "目标考核映射表"
@@ -1150,8 +1910,13 @@ public class OutlineParseEngine {
         if (nm.contains("算法") || nm.contains("计算") || nm.contains("考核方式1") || nm.contains("考核方式2") || nm.contains("=")) {
             return false;
         }
+        boolean hasNumericWeights = !extractAllWeights(text).isEmpty()
+            || cells.stream().skip(1).anyMatch(cell -> extractPercentOrPlainWeight(cell) != null);
+        if (nm.contains("合计") && hasNumericWeights) {
+            return true;
+        }
         return (nm.contains("考核方式") || nm.contains("考核比例")) && nm.contains("比例")
-            && !extractAllWeights(text).isEmpty();
+            && hasNumericWeights;
     }
 
     private void extractAssessWeightsFromFooter(
@@ -1162,9 +1927,10 @@ public class OutlineParseEngine {
         List<Double> weights = new ArrayList<>();
         if (cells.size() >= 2) {
             for (int i = 1; i < cells.size(); i++) {
-                extractAllWeights(cells.get(i)).stream()
-                    .filter(w -> Math.abs(w - 100) > 0.01)
-                    .forEach(weights::add);
+                Double value = extractPercentOrPlainWeight(cells.get(i));
+                if (value != null && Math.abs(value - 100) > 0.01) {
+                    weights.add(value);
+                }
             }
         } else {
             extractAllWeights(text).stream()
@@ -1180,15 +1946,14 @@ public class OutlineParseEngine {
         for (int i = 0; i < Math.min(weights.size(), resolvedHeaders.size()); i++) {
             String ruleName = resolvedHeaders.get(i);
             double weight = weights.get(i);
-            for (AssessKeywordRule rule : ASSESS_KEYWORD_RULES) {
-                if (rule.name().equals(ruleName)) {
-                    appliedRuleNames.add(ruleName);
-                    items.put(ruleName, new AssessCandidate(
-                        ruleName, rule.type(), weight, 0.96D,
-                        "成绩构成表：" + ruleName + " " + weight + "%"
-                    ));
-                    break;
-                }
+            AssessKeywordRule rule = assessRuleForHeaderToken(ruleName);
+            if (rule != null) {
+                String itemName = normalizeAssessDisplayName(ruleName, rule);
+                appliedRuleNames.add(itemName);
+                putAssessCandidate(items, new AssessCandidate(
+                    itemName, rule.type(), weight, 0.96D,
+                    "成绩构成表：" + itemName + " " + weight + "%"
+                ));
             }
         }
         double appliedTotal = appliedRuleNames.stream()
@@ -1205,6 +1970,9 @@ public class OutlineParseEngine {
         String normalized = sanitizeText(text);
         normalized = stripObjectiveArtifacts(normalized);
         if (!StringUtils.hasText(normalized)) {
+            return null;
+        }
+        if (!inObjectiveSection && normalized.contains("|")) {
             return null;
         }
 
@@ -1254,12 +2022,13 @@ public class OutlineParseEngine {
 
     private void assignObjectiveWeights(List<ObjectiveCandidate> candidates) {
         double explicitTotal = candidates.stream()
-            .filter(candidate -> candidate.explicitWeight != null)
-            .mapToDouble(candidate -> candidate.explicitWeight)
+            .map(this::effectiveObjectiveWeight)
+            .filter(weight -> weight != null)
+            .mapToDouble(Double::doubleValue)
             .sum();
 
         List<ObjectiveCandidate> missingWeights = candidates.stream()
-            .filter(candidate -> candidate.explicitWeight == null)
+            .filter(candidate -> effectiveObjectiveWeight(candidate) == null)
             .toList();
 
         if (!missingWeights.isEmpty()) {
@@ -1281,6 +2050,70 @@ public class OutlineParseEngine {
                 candidates.get(index).weight = updatedWeights.get(index);
             }
         });
+    }
+
+    private Double effectiveObjectiveWeight(ObjectiveCandidate candidate) {
+        if (candidate.explicitWeight != null) {
+            return candidate.explicitWeight;
+        }
+        return candidate.weight > 0D ? candidate.weight : null;
+    }
+
+    private void applyObjectiveWeightsFromMatrix(List<ObjectiveCandidate> candidates, ObjAssessMatrix matrix) {
+        if (matrix == null) {
+            return;
+        }
+        Map<Integer, Double> weightsByObjective = new LinkedHashMap<>();
+        for (ObjAssessMatrixRow row : matrix.rows()) {
+            if (row.totalWeight() != null && row.totalWeight() > 0D) {
+                weightsByObjective.put(row.objectiveNumber(), row.totalWeight());
+            }
+        }
+        if (weightsByObjective.isEmpty()) {
+            return;
+        }
+        for (int index = 0; index < candidates.size(); index++) {
+            ObjectiveCandidate candidate = candidates.get(index);
+            Integer objectiveNumber = parseObjectiveNumber(candidate.rawNumber);
+            if (objectiveNumber == null) {
+                objectiveNumber = index + 1;
+            }
+            Double weight = weightsByObjective.get(objectiveNumber);
+            if (weight != null && weight > 0D) {
+                candidate.weight = weight;
+            }
+        }
+    }
+
+    private Integer parseObjectiveNumber(String rawNumber) {
+        if (!StringUtils.hasText(rawNumber)) {
+            return null;
+        }
+        if (rawNumber.matches("\\d+")) {
+            return Integer.parseInt(rawNumber);
+        }
+        int value = chineseNumberToInt(rawNumber);
+        return value > 0 ? value : null;
+    }
+
+    private void alignAssessCandidatesWithMatrixNames(List<AssessCandidate> candidates, ObjAssessMatrix matrix) {
+        if (matrix == null || candidates.isEmpty()) {
+            return;
+        }
+        Set<String> usedTypes = new LinkedHashSet<>();
+        for (int index = 0; index < matrix.methodNames().size(); index++) {
+            String methodName = matrix.methodNames().get(index);
+            String methodType = index < matrix.methodTypes().size() ? matrix.methodTypes().get(index) : assessTypeForHeader(methodName);
+            if (!StringUtils.hasText(methodName) || !StringUtils.hasText(methodType) || !usedTypes.add(methodType)) {
+                continue;
+            }
+            for (AssessCandidate candidate : candidates) {
+                if (methodType.equals(candidate.type)) {
+                    candidate.name = methodName;
+                    break;
+                }
+            }
+        }
     }
 
     private void completeAssessTypes(List<AssessCandidate> candidates) {
@@ -1646,6 +2479,9 @@ public class OutlineParseEngine {
         String content,
         int objType,
         double weight,
+        String gradReqId,
+        String gradReqDesc,
+        String relationLevel,
         double confidenceScore,
         String confidenceLevel,
         String originalText
@@ -1685,11 +2521,93 @@ public class OutlineParseEngine {
         Integer hours,
         Double credits,
         String prerequisiteCourse,
-        String courseOwner
+        String courseOwner,
+        List<TeachingContentInfo> teachingContents,
+        List<AssessmentDetail> assessmentDetails,
+        List<String> assessmentStandards,
+        AssessmentPolicy assessmentPolicy
+    ) {
+        public CourseInfo(
+            String courseCode,
+            String courseNameZh,
+            String courseNameEn,
+            String courseType,
+            String targetStudents,
+            String teachingLanguage,
+            String collegeName,
+            Integer hours,
+            Double credits,
+            String prerequisiteCourse,
+            String courseOwner
+        ) {
+            this(
+                courseCode,
+                courseNameZh,
+                courseNameEn,
+                courseType,
+                targetStudents,
+                teachingLanguage,
+                collegeName,
+                hours,
+                credits,
+                prerequisiteCourse,
+                courseOwner,
+                List.of(),
+                List.of(),
+                List.of(),
+                new AssessmentPolicy("", "", "", "", "")
+            );
+        }
+    }
+
+    public record TeachingContentInfo(
+        String title,
+        Integer lectureHours,
+        Integer practiceHours,
+        String teachingMethod,
+        String relatedObjectives,
+        String requirements,
+        String originalText
+    ) {
+    }
+
+    public record AssessmentDetail(
+        String name,
+        Double weight,
+        String content,
+        String evaluationMethod,
+        String supports,
+        String originalText
+    ) {
+    }
+
+    public record AssessmentPolicy(
+        String scoreRecordMode,
+        String finalGradeComposition,
+        String assessmentMode,
+        String makeupExam,
+        String originalText
     ) {
     }
 
     public record SourceSegment(String label, String text, int sortOrder) {
+    }
+
+    private record TeachingHeading(String title, Integer hours) {
+    }
+
+    private record CourseNameParts(String zh, String en) {
+    }
+
+    private record AssessmentDetailBlock(
+        String name,
+        String type,
+        Double weight,
+        String content,
+        String evaluationMethod,
+        String supports,
+        String originalText
+    ) {
     }
 
     private record ObjectiveTypePrediction(int type, int keywordScore) {
@@ -1698,25 +2616,75 @@ public class OutlineParseEngine {
     private record AssessKeywordRule(String name, String type, List<String> keywords) {
     }
 
-    private record ObjectiveLineMatch(String rawNumber, String content, Double explicitWeight) {
+    private record ObjectiveLineMatch(
+        String rawNumber,
+        String content,
+        Double explicitWeight,
+        String relationLevel,
+        String gradReqId,
+        String gradReqDesc
+    ) {
         ObjectiveLineMatch(String rawNumber, String content) {
-            this(rawNumber, content, null);
+            this(rawNumber, content, null, "", "", "");
+        }
+
+        ObjectiveLineMatch(String rawNumber, String content, Double explicitWeight) {
+            this(rawNumber, content, explicitWeight, "", "", "");
         }
     }
 
     private record LineEntry(String text, List<String> cells, int sortOrder) {
     }
 
+    private static final class MutableAssessmentDetailBlock {
+        private final String type;
+        private final String name;
+        private Double weight;
+        private String content = "";
+        private String evaluationMethod = "";
+        private String supports = "";
+        private final StringBuilder originalText = new StringBuilder();
+
+        private MutableAssessmentDetailBlock(String type, String name) {
+            this.type = type;
+            this.name = name;
+        }
+
+        private void appendOriginal(String text) {
+            if (!StringUtils.hasText(text)) {
+                return;
+            }
+            if (originalText.length() > 0) {
+                originalText.append('\n');
+            }
+            originalText.append(text);
+        }
+    }
+
     private static final class ObjectiveAccumulator {
         private final String rawNumber;
         private final int sortOrder;
+        private final String relationLevel;
+        private final String gradReqId;
+        private final String gradReqDesc;
         private final StringBuilder content;
         private final StringBuilder originalText;
         private Double explicitWeight;
 
-        private ObjectiveAccumulator(String rawNumber, String content, String originalText, int sortOrder) {
+        private ObjectiveAccumulator(
+            String rawNumber,
+            String content,
+            String originalText,
+            int sortOrder,
+            String relationLevel,
+            String gradReqId,
+            String gradReqDesc
+        ) {
             this.rawNumber = rawNumber;
             this.sortOrder = sortOrder;
+            this.relationLevel = defaultIfBlankStatic(relationLevel, "");
+            this.gradReqId = defaultIfBlankStatic(gradReqId, "");
+            this.gradReqDesc = defaultIfBlankStatic(gradReqDesc, "");
             this.content = new StringBuilder(defaultIfBlankStatic(content, ""));
             this.originalText = new StringBuilder(defaultIfBlankStatic(originalText, ""));
         }
@@ -1754,6 +2722,18 @@ public class OutlineParseEngine {
             return this.sortOrder;
         }
 
+        private String relationLevel() {
+            return this.relationLevel;
+        }
+
+        private String gradReqId() {
+            return this.gradReqId;
+        }
+
+        private String gradReqDesc() {
+            return this.gradReqDesc;
+        }
+
         private static String defaultIfBlankStatic(String value, String defaultValue) {
             return StringUtils.hasText(value) ? value : defaultValue;
         }
@@ -1766,6 +2746,9 @@ public class OutlineParseEngine {
         private final boolean inObjectiveSection;
         private final int sortOrder;
         private final Double explicitWeight;
+        private final String gradReqId;
+        private final String gradReqDesc;
+        private final String relationLevel;
         private double weight;
 
         private ObjectiveCandidate(
@@ -1775,6 +2758,9 @@ public class OutlineParseEngine {
             boolean inObjectiveSection,
             int sortOrder,
             Double explicitWeight,
+            String gradReqId,
+            String gradReqDesc,
+            String relationLevel,
             double weight
         ) {
             this.rawNumber = rawNumber;
@@ -1783,6 +2769,9 @@ public class OutlineParseEngine {
             this.inObjectiveSection = inObjectiveSection;
             this.sortOrder = sortOrder;
             this.explicitWeight = explicitWeight;
+            this.gradReqId = gradReqId;
+            this.gradReqDesc = gradReqDesc;
+            this.relationLevel = relationLevel;
             this.weight = weight;
         }
 
@@ -1792,7 +2781,7 @@ public class OutlineParseEngine {
     }
 
     private static final class AssessCandidate {
-        private final String name;
+        private String name;
         private final String type;
         private double weight;
         private double confidenceScore;

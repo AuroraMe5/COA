@@ -112,7 +112,7 @@ onMounted(loadDashboard)
   gap: 12px;
   align-items: center;
   width: 100%;
-  padding: 14px 0;
+  padding: 12px 0;
   background: transparent;
   border: none;
   border-bottom: 1px solid #e8f0f4;
@@ -147,15 +147,21 @@ onMounted(loadDashboard)
 .quick-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .quick-link {
-  padding: 18px;
-  border-radius: 18px;
+  padding: 14px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
-  background: linear-gradient(180deg, #fcfeff, #f1f8fb);
+  background: var(--bg-panel);
   text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.quick-link:hover {
+  border-color: rgba(31, 95, 139, 0.32);
+  background: var(--bg-panel-soft);
 }
 
 .quick-link strong {
@@ -172,7 +178,7 @@ onMounted(loadDashboard)
 }
 
 .achievement-item + .achievement-item {
-  margin-top: 18px;
+  margin-top: 16px;
 }
 
 .achievement-row {
@@ -184,7 +190,7 @@ onMounted(loadDashboard)
 
 .progress-track {
   width: 100%;
-  height: 10px;
+  height: 8px;
   overflow: hidden;
   border-radius: 999px;
   background: #e8f1f5;

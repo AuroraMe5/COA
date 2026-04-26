@@ -29,10 +29,12 @@ defineProps({
 
 <style scoped>
 .stat-card {
-  padding: 22px 20px;
-  border-radius: 20px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 251, 252, 0.96));
+  min-height: 112px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
   border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-primary);
   box-shadow: var(--shadow-card);
 }
 
@@ -42,8 +44,8 @@ defineProps({
 }
 
 .stat-value {
-  margin-top: 14px;
-  font-size: 34px;
+  margin-top: 12px;
+  font-size: 30px;
   font-weight: 800;
   line-height: 1;
 }
@@ -58,15 +60,31 @@ defineProps({
   color: var(--color-primary);
 }
 
+.tone-primary {
+  border-left-color: var(--color-primary);
+}
+
 .tone-secondary .stat-value {
   color: var(--color-secondary);
+}
+
+.tone-secondary {
+  border-left-color: var(--color-secondary);
 }
 
 .tone-success .stat-value {
   color: var(--color-success);
 }
 
+.tone-success {
+  border-left-color: var(--color-success);
+}
+
 .tone-warning .stat-value {
   color: var(--color-warning);
+}
+
+.tone-warning {
+  border-left-color: var(--color-warning);
 }
 </style>

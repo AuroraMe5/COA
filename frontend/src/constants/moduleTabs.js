@@ -28,34 +28,14 @@ export const collectModuleTabs = [
     to: '/collect/grades'
   },
   {
-    label: '学生评价录入',
-    to: '/collect/evaluations'
-  },
-  {
-    label: '教学反思录入',
-    to: '/collect/reflections'
-  },
-  {
-    label: '督导评价查看',
-    to: '/collect/supervisors'
+    label: '学生成绩管理',
+    to: '/collect/grades/manage'
   }
 ]
 
 export const analysisImproveTabs = [
   {
-    label: '达成度核算',
+    label: '达成度核算与报告',
     to: '/analysis/calculation'
-  },
-  {
-    label: '多维分析报表',
-    to: '/analysis/overview'
-  },
-  {
-    label: '智能建议中心',
-    to: '/analysis/suggestions'
-  },
-  {
-    label: '改进措施跟踪',
-    to: '/analysis/improvements'
   }
 ]

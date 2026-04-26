@@ -3,7 +3,6 @@
     <ModuleHeader
       title="教学目标管理"
       description="维护目标与考核项之间的贡献权重矩阵，为达成度核算提供直接输入。"
-      :tabs="objectiveManageTabs"
     >
       <template #actions>
         <button class="btn btn-primary" @click="saveAll">保存映射矩阵</button>
@@ -76,7 +75,6 @@ import { getObjectiveMapping, saveObjectiveMapping } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],

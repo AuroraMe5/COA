@@ -42,6 +42,8 @@ const menuGroups = [
     items: [
       { label: '课程大纲管理', to: '/objectives/outlines' },
       { label: '教学目标列表', to: '/objectives/list' },
+      { label: '目标分解与权重', to: '/objectives/weights' },
+      { label: '智能解析导入', to: '/objectives/parse-import' },
       { label: '目标考核映射', to: '/objectives/mapping' }
     ]
   },
@@ -49,33 +51,22 @@ const menuGroups = [
     title: '数据采集',
     items: [
       { label: '成绩批量导入', to: '/collect/grades' },
-      { label: '学生成绩管理', to: '/collect/grades/manage' },
-      { label: '学生评价录入', to: '/collect/evaluations' },
-      { label: '教学反思录入', to: '/collect/reflections' },
-      { label: '督导评价查看', to: '/collect/supervisors' }
+      { label: '学生成绩管理', to: '/collect/grades/manage' }
     ]
   },
   {
     title: '结果分析与教学改进',
     items: [
-      { label: '达成度核算', to: '/analysis/calculation' },
-      { label: '多维分析报表', to: '/analysis/overview' },
-      { label: '智能建议中心', to: '/analysis/suggestions' },
-      { label: '改进措施跟踪', to: '/analysis/improvements' }
+      { label: '达成度核算与报告', to: '/analysis/calculation' }
     ]
   }
 ]
 
 function isActive(path) {
-  // 教学目标模块下有多个“兄弟页面”共用同一导航入口，
-  // 比如编辑页、权重页、解析导入页都应该高亮“教学目标列表”这一组。
+  // 编辑页不单独出现在侧边栏，仍归到“教学目标列表”入口。
   if (
     path === '/objectives/list' &&
-    (
-      route.path.startsWith('/objectives/edit') ||
-      route.path.startsWith('/objectives/weights') ||
-      route.path.startsWith('/objectives/parse-import')
-    )
+    route.path.startsWith('/objectives/edit')
   ) {
     return true
   }
@@ -93,36 +84,35 @@ function isActive(path) {
   position: sticky;
   top: 0;
   height: 100vh;
-  padding: 26px 18px;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.12), transparent 30%),
-    linear-gradient(180deg, #163f61 0%, #1d567f 45%, #0f7e73 100%);
+  padding: 18px 14px;
+  background: var(--color-primary-deep);
   color: #fff;
   overflow: auto;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 10px 26px;
+  gap: 12px;
+  padding: 8px 8px 20px;
 }
 
 .brand-mark {
-  width: 48px;
-  height: 48px;
-  border-radius: 16px;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.2);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
 }
 
 .brand-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -134,14 +124,14 @@ function isActive(path) {
 
 .nav-stack {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 
 .nav-group h3 {
-  margin: 0 0 10px;
-  padding: 0 10px;
+  margin: 0 0 8px;
+  padding: 0 8px;
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.62);
 }
@@ -149,11 +139,12 @@ function isActive(path) {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  gap: 9px;
+  min-height: 40px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
   color: rgba(255, 255, 255, 0.84);
-  transition: background 0.16s ease, transform 0.16s ease;
+  transition: background 0.16s ease, color 0.16s ease;
 }
 
 .nav-item + .nav-item {
@@ -161,7 +152,6 @@ function isActive(path) {
 }
 
 .nav-item:hover {
-  transform: translateX(2px);
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -172,10 +162,11 @@ function isActive(path) {
 }
 
 .nav-dot {
-  width: 9px;
-  height: 9px;
+  width: 3px;
+  height: 18px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.42);
+  background: transparent;
+  flex-shrink: 0;
 }
 
 .nav-item.active .nav-dot {

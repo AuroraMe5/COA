@@ -19,22 +19,25 @@ import AppSidebar from './AppSidebar.vue'
 .shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr);
+  grid-template-columns: 256px minmax(0, 1fr);
+  background: var(--bg-app);
 }
 
 .shell-main {
   min-width: 0;
   display: grid;
   grid-template-rows: auto 1fr;
+  min-height: 100vh;
 }
 
 .shell-content {
   min-width: 0;
+  background: var(--bg-app);
 }
 
 @media (max-width: 1080px) {
   .shell {
-    grid-template-columns: 1fr;
+    display: block;
   }
 }
 </style>

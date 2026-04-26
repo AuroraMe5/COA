@@ -53,35 +53,34 @@ function isActive(tab) {
 <style scoped>
 .module-header {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .module-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
   border: 1px solid var(--color-border);
   box-shadow: var(--shadow-soft);
 }
 
 .module-tab {
-  padding: 10px 16px;
-  border-radius: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-soft);
   font-weight: 600;
-  transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  transition: background 0.16s ease, color 0.16s ease;
 }
 
 .module-tab:hover {
-  transform: translateY(-1px);
   background: rgba(31, 95, 139, 0.06);
 }
 
 .module-tab.active {
-  background: linear-gradient(135deg, rgba(31, 95, 139, 0.12), rgba(15, 138, 120, 0.12));
+  background: var(--bg-accent-soft);
   color: var(--color-primary-deep);
   box-shadow: inset 0 0 0 1px rgba(31, 95, 139, 0.12);
 }

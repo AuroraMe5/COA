@@ -3,7 +3,6 @@
     <ModuleHeader
       title="教学目标管理"
       description="将目标分解与权重从原有独立页面并入教学目标管理模块。这里用于集中校验目标层与分解点层的权重配置。"
-      :tabs="objectiveManageTabs"
     >
       <template #actions>
         <button class="btn btn-primary" @click="saveAll">保存权重配置</button>
@@ -99,7 +98,6 @@ import { getObjectiveWeights, saveObjectiveWeights } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import { objectiveManageTabs } from '@/constants/moduleTabs'
 
 const catalogs = reactive({
   courses: [],
@@ -178,8 +176,8 @@ onMounted(loadWeights)
 
 <style scoped>
 .weight-card {
-  padding: 18px;
-  border-radius: 18px;
+  padding: 16px;
+  border-radius: var(--radius-md);
   border: 1px solid #e6eef2;
   background: #fbfdfe;
 }
