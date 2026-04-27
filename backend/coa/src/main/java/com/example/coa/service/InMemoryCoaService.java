@@ -116,6 +116,83 @@ public class InMemoryCoaService {
         return catalogCourses();
     }
 
+    public Map<String, Object> getCourseDetail(Long courseId, String semester) {
+        long currentCourseId = normalizeCourseId(courseId);
+        String currentSemester = normalizeSemester(semester);
+        Long outlineId = findOutlineId(currentCourseId, currentSemester);
+
+        Map<String, Object> course = getCourseMetaById(currentCourseId);
+        Map<String, Object> outline = outlineId == null ? new LinkedHashMap<>() : getOutlineById(outlineId);
+        List<Map<String, Object>> objectives = outlineId == null ? new ArrayList<>() : objectiveList(outlineId);
+        List<Map<String, Object>> assessItems = outlineId == null ? new ArrayList<>() : assessItemListByOutline(outlineId);
+        List<Map<String, Object>> mappingRows = outlineId == null ? new ArrayList<>() : buildMappingRows(objectives, assessItems);
+        Map<String, Object> latestParsedCourse = latestParsedCourseInfo(currentCourseId, currentSemester);
+        List<Map<String, Object>> teachingContents = courseTeachingContentList(currentCourseId, currentSemester);
+        if (!teachingContents.isEmpty() || !latestParsedCourse.containsKey("teachingContents")) {
+            latestParsedCourse.put("teachingContents", teachingContents);
+        }
+        List<String> teacherNames = courseTeacherNames(currentCourseId, currentSemester);
+
+        double objectiveWeight = objectives.stream()
+            .mapToDouble(item -> defaultDouble(item.get("weight"), 0D))
+            .sum();
+        double assessWeight = assessItems.stream()
+            .mapToDouble(item -> defaultDouble(item.get("weight"), 0D))
+            .sum();
+
+        Map<String, Object> result = referenceData();
+        result.put("currentCourseId", currentCourseId);
+        result.put("currentSemester", currentSemester);
+        result.put("course", course);
+        result.put("outline", outline);
+        result.put("objectives", objectives);
+        result.put("assessItems", assessItems);
+        result.put("mappingRows", mappingRows);
+        result.put("latestParsedCourse", latestParsedCourse);
+        result.put("teacherNames", teacherNames);
+        result.put("summary", map(
+            "objectiveCount", objectives.size(),
+            "objectiveWeight", round2(objectiveWeight),
+            "assessItemCount", assessItems.size(),
+            "assessWeight", round2(assessWeight),
+            "mappingRowCount", mappingRows.size(),
+            "teacherNames", teacherNames,
+            "teachingContentCount", listSize(latestParsedCourse.get("teachingContents")),
+            "assessmentDetailCount", listSize(latestParsedCourse.get("assessmentDetails"))
+        ));
+        return result;
+    }
+
+    public Map<String, Object> updateCourse(Long courseId, Map<String, Object> payload) {
+        long id = longValue(courseId);
+        applyCourseOverrides(id, payload, List.of(
+            "courseCode",
+            "courseNameZh",
+            "courseNameEn",
+            "courseType",
+            "targetStudents",
+            "teachingLanguage",
+            "collegeName",
+            "hours",
+            "credits",
+            "prerequisiteCourse",
+            "courseOwner"
+        ));
+        return getCourseDetail(id, defaultString(payload.get("semester"), normalizeSemester(null)));
+    }
+
+    public Map<String, Object> updateCourseTeachingContents(Long courseId, String semester, Map<String, Object> payload) {
+        long id = longValue(courseId);
+        String semesterCode = normalizeSemester(semester);
+        long semesterId = requireSemesterId(semesterCode);
+        List<Map<String, Object>> teachingContents = normalizeTeachingContents(listOfMap(payload.get("teachingContents")));
+        replaceCourseTeachingContents(id, semesterId, teachingContents);
+
+        Map<String, Object> result = getCourseDetail(id, semesterCode);
+        result.put("savedTeachingContents", teachingContents.size());
+        return result;
+    }
+
     public List<String> getSemesters() {
         return catalogSemesters();
     }
@@ -790,6 +867,7 @@ public class InMemoryCoaService {
         }
         ensureCourseTeacher(courseId, teacherId, semesterId);
         long outlineId = ensureOutline(courseId, semesterCode);
+        List<Map<String, Object>> submittedTeachingContents = normalizeTeachingContents(listOfMap(mergedCourseInfo.get("teachingContents")));
 
         List<Map<String, Object>> objectiveDrafts = jdbcTemplate.query("""
             SELECT *
@@ -843,6 +921,9 @@ public class InMemoryCoaService {
             objectiveDrafts,
             mappingList
         );
+        if (!submittedTeachingContents.isEmpty()) {
+            replaceCourseTeachingContents(courseId, semesterId, submittedTeachingContents);
+        }
         jdbcTemplate.update("""
             UPDATE parse_task
             SET status = 'CONFIRMED',
@@ -2620,6 +2701,180 @@ public class InMemoryCoaService {
             .addValue("semesterId", semesterId), rs -> rs.next() ? rs.getLong("id") : null);
     }
 
+    private Map<String, Object> latestParsedCourseInfo(long courseId, String semesterCode) {
+        Long semesterId = findSemesterId(semesterCode);
+        if (semesterId == null) {
+            return new LinkedHashMap<>();
+        }
+
+        List<Map<String, Object>> rows = jdbcTemplate.query("""
+            SELECT task_no, parsed_course_json
+            FROM parse_task
+            WHERE course_id = :courseId
+              AND semester_id = :semesterId
+              AND parsed_course_json IS NOT NULL
+              AND parsed_course_json <> ''
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 20
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId), (rs, rowNum) -> {
+            Map<String, Object> courseInfo = readMap(rs.getString("parsed_course_json"));
+            courseInfo.put("taskId", rs.getString("task_no"));
+            return courseInfo;
+        });
+
+        return rows.stream()
+            .max(Comparator
+                .comparingInt(this::parsedCourseQualityScore)
+                .thenComparing(item -> defaultString(item.get("taskId"), "")))
+            .orElseGet(LinkedHashMap::new);
+    }
+
+    private int parsedCourseQualityScore(Map<String, Object> courseInfo) {
+        int score = 0;
+        for (Map<String, Object> item : listOfMap(courseInfo.get("teachingContents"))) {
+            score += StringUtils.hasText(defaultString(item.get("title"), "")) ? 1 : 0;
+            score += StringUtils.hasText(defaultString(item.get("relatedObjectives"), "")) ? 10 : 0;
+            score += StringUtils.hasText(defaultString(item.get("requirements"), "")) ? 10 : 0;
+        }
+        score += listSize(courseInfo.get("assessmentDetails"));
+        score += listSize(courseInfo.get("assessmentStandards"));
+        return score;
+    }
+
+    private List<Map<String, Object>> normalizeTeachingContents(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            String title = defaultString(row.get("title"), "");
+            String requirements = defaultString(row.get("requirements"), "");
+            String relatedObjectives = defaultString(row.get("relatedObjectives"), "");
+            String teachingMethod = defaultString(row.get("teachingMethod"), "");
+            String sourceText = defaultString(row.get("sourceText"), defaultString(row.get("originalText"), ""));
+            if (!StringUtils.hasText(title)
+                && !StringUtils.hasText(requirements)
+                && !StringUtils.hasText(relatedObjectives)
+                && !StringUtils.hasText(teachingMethod)) {
+                continue;
+            }
+            result.add(map(
+                "title", title,
+                "lectureHours", nullableBigDecimal(row.get("lectureHours")),
+                "practiceHours", nullableBigDecimal(row.get("practiceHours")),
+                "teachingMethod", teachingMethod,
+                "relatedObjectives", relatedObjectives,
+                "requirements", requirements,
+                "sourceText", sourceText
+            ));
+        }
+        return result;
+    }
+
+    private void replaceCourseTeachingContents(long courseId, long semesterId, List<Map<String, Object>> teachingContents) {
+        jdbcTemplate.update("""
+            DELETE FROM course_teaching_content
+            WHERE course_id = :courseId
+              AND semester_id = :semesterId
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId));
+
+        int sortOrder = 1;
+        for (Map<String, Object> item : teachingContents) {
+            jdbcTemplate.update("""
+                INSERT INTO course_teaching_content (
+                    course_id,
+                    semester_id,
+                    title,
+                    lecture_hours,
+                    practice_hours,
+                    teaching_method,
+                    related_objectives,
+                    requirements,
+                    source_text,
+                    sort_order
+                ) VALUES (
+                    :courseId,
+                    :semesterId,
+                    :title,
+                    :lectureHours,
+                    :practiceHours,
+                    :teachingMethod,
+                    :relatedObjectives,
+                    :requirements,
+                    :sourceText,
+                    :sortOrder
+                )
+                """, new MapSqlParameterSource()
+                .addValue("courseId", courseId)
+                .addValue("semesterId", semesterId)
+                .addValue("title", defaultString(item.get("title"), "教学内容" + sortOrder))
+                .addValue("lectureHours", nullableBigDecimal(item.get("lectureHours")))
+                .addValue("practiceHours", nullableBigDecimal(item.get("practiceHours")))
+                .addValue("teachingMethod", defaultString(item.get("teachingMethod"), ""))
+                .addValue("relatedObjectives", defaultString(item.get("relatedObjectives"), ""))
+                .addValue("requirements", defaultString(item.get("requirements"), ""))
+                .addValue("sourceText", defaultString(item.get("sourceText"), ""))
+                .addValue("sortOrder", sortOrder++));
+        }
+    }
+
+    private List<String> courseTeacherNames(long courseId, String semesterCode) {
+        Long semesterId = findSemesterId(semesterCode);
+        if (semesterId == null) {
+            return new ArrayList<>();
+        }
+
+        return jdbcTemplate.query("""
+            SELECT u.real_name
+            FROM course_teacher ct
+            JOIN sys_user u ON u.id = ct.teacher_id
+            WHERE ct.course_id = :courseId
+              AND ct.semester_id = :semesterId
+              AND ct.status = 1
+              AND u.status = 1
+            ORDER BY ct.id ASC
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId), (rs, rowNum) -> defaultString(rs.getString("real_name"), ""));
+    }
+
+    private List<Map<String, Object>> courseTeachingContentList(long courseId, String semesterCode) {
+        Long semesterId = findSemesterId(semesterCode);
+        if (semesterId == null) {
+            return new ArrayList<>();
+        }
+
+        return jdbcTemplate.query("""
+            SELECT
+                id,
+                title,
+                lecture_hours,
+                practice_hours,
+                teaching_method,
+                related_objectives,
+                requirements,
+                source_text,
+                sort_order
+            FROM course_teaching_content
+            WHERE course_id = :courseId
+              AND semester_id = :semesterId
+            ORDER BY sort_order ASC, id ASC
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId), (rs, rowNum) -> map(
+            "id", rs.getLong("id"),
+            "title", defaultString(rs.getString("title"), ""),
+            "lectureHours", rs.getObject("lecture_hours") == null ? "" : rs.getBigDecimal("lecture_hours"),
+            "practiceHours", rs.getObject("practice_hours") == null ? "" : rs.getBigDecimal("practice_hours"),
+            "teachingMethod", defaultString(rs.getString("teaching_method"), ""),
+            "relatedObjectives", defaultString(rs.getString("related_objectives"), ""),
+            "requirements", defaultString(rs.getString("requirements"), ""),
+            "sourceText", defaultString(rs.getString("source_text"), ""),
+            "sortOrder", rs.getInt("sort_order")
+        ));
+    }
+
     private long ensureOutline(long courseId, String semesterCode) {
         Long existing = findOutlineId(courseId, semesterCode);
         if (existing != null) {
@@ -2732,7 +2987,16 @@ public class InMemoryCoaService {
             """, params("semesterId", longValue(scope.get("semester_id"))));
 
         return jdbcTemplate.query("""
-            SELECT id, obj_code, obj_content, obj_type, weight, sort_order
+            SELECT
+                id,
+                obj_code,
+                obj_content,
+                obj_type,
+                weight,
+                sort_order,
+                grad_req_id,
+                grad_req_desc,
+                relation_level
             FROM teach_objective
             WHERE outline_id = :outlineId
             ORDER BY sort_order ASC, id ASC
@@ -2749,6 +3013,9 @@ public class InMemoryCoaService {
                 "objType", rs.getInt("obj_type"),
                 "objTypeName", objTypeName(rs.getInt("obj_type")),
                 "weight", rs.getBigDecimal("weight"),
+                "gradReqId", defaultString(rs.getString("grad_req_id"), ""),
+                "gradReqDesc", defaultString(rs.getString("grad_req_desc"), ""),
+                "relationLevel", defaultString(rs.getString("relation_level"), ""),
                 "sortOrder", rs.getInt("sort_order"),
                 "decomposeCount", decompose.size(),
                 "decompose", decompose
@@ -2869,6 +3136,85 @@ public class InMemoryCoaService {
         ensureColumn("teach_objective", "grad_req_desc", "VARCHAR(500) NULL");
         ensureColumn("teach_objective", "relation_level", "VARCHAR(4) DEFAULT 'H'");
         ensureColumn("intelligent_suggestion", "suggestion_source", "VARCHAR(30) DEFAULT 'RULE'");
+        ensureCourseTeachingContentTable();
+        migrateParsedTeachingContentsToTable();
+    }
+
+    private void ensureCourseTeachingContentTable() {
+        try {
+            plainJdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS course_teaching_content (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    course_id BIGINT NOT NULL,
+                    semester_id BIGINT NOT NULL,
+                    title VARCHAR(255) NOT NULL,
+                    lecture_hours DECIMAL(5,1) NULL,
+                    practice_hours DECIMAL(5,1) NULL,
+                    teaching_method VARCHAR(100) NULL,
+                    related_objectives VARCHAR(255) NULL,
+                    requirements TEXT NULL,
+                    source_text TEXT NULL,
+                    sort_order INT NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    KEY idx_course_teaching_scope (course_id, semester_id, sort_order),
+                    CONSTRAINT fk_course_teaching_course FOREIGN KEY (course_id) REFERENCES base_course (id) ON DELETE CASCADE,
+                    CONSTRAINT fk_course_teaching_semester FOREIGN KEY (semester_id) REFERENCES base_semester (id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='课程教学内容表'
+                """);
+        } catch (Exception e) {
+            log.warn("Schema migration failed for course_teaching_content: {}", e.getMessage());
+        }
+    }
+
+    private void migrateParsedTeachingContentsToTable() {
+        try {
+            List<Map<String, Object>> tasks = jdbcTemplate.query("""
+                SELECT course_id, semester_id, parsed_course_json
+                FROM parse_task
+                WHERE parsed_course_json IS NOT NULL
+                  AND parsed_course_json <> ''
+                ORDER BY updated_at DESC, id DESC
+                """, new MapSqlParameterSource(), (rs, rowNum) -> map(
+                "courseId", rs.getLong("course_id"),
+                "semesterId", rs.getLong("semester_id"),
+                "courseInfo", readMap(rs.getString("parsed_course_json"))
+            ));
+
+            Map<String, Map<String, Object>> bestByScope = new LinkedHashMap<>();
+            for (Map<String, Object> task : tasks) {
+                Map<String, Object> courseInfo = mapOfObject(task.get("courseInfo"));
+                if (listSize(courseInfo.get("teachingContents")) == 0) {
+                    continue;
+                }
+                String key = task.get("courseId") + ":" + task.get("semesterId");
+                Map<String, Object> current = bestByScope.get(key);
+                if (current == null || parsedCourseQualityScore(courseInfo) > parsedCourseQualityScore(mapOfObject(current.get("courseInfo")))) {
+                    bestByScope.put(key, task);
+                }
+            }
+
+            for (Map<String, Object> task : bestByScope.values()) {
+                long courseId = longValue(task.get("courseId"));
+                long semesterId = longValue(task.get("semesterId"));
+                long existing = count("""
+                    SELECT COUNT(*)
+                    FROM course_teaching_content
+                    WHERE course_id = :courseId
+                      AND semester_id = :semesterId
+                    """, new MapSqlParameterSource()
+                    .addValue("courseId", courseId)
+                    .addValue("semesterId", semesterId));
+                if (existing > 0) {
+                    continue;
+                }
+                Map<String, Object> courseInfo = mapOfObject(task.get("courseInfo"));
+                replaceCourseTeachingContents(courseId, semesterId, normalizeTeachingContents(listOfMap(courseInfo.get("teachingContents"))));
+            }
+        } catch (Exception e) {
+            log.warn("Teaching content migration skipped: {}", e.getMessage());
+        }
     }
 
     private void ensureColumn(String table, String column, String definition) {
@@ -2941,6 +3287,29 @@ public class InMemoryCoaService {
             .addValue("id", parseTaskId)
             .addValue("matrixJson", writeJson(payload)));
         return map("success", true);
+    }
+
+    public Map<String, Object> updateParseCourseInfo(String taskId, Map<String, Object> payload) {
+        long parseTaskId = resolveParseTaskId(taskId);
+        Map<String, Object> existing = jdbcTemplate.query("""
+            SELECT parsed_course_json
+            FROM parse_task
+            WHERE id = :id
+            """, params("id", parseTaskId), rs -> rs.next() ? readMap(rs.getString("parsed_course_json")) : new LinkedHashMap<>());
+
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>(existing);
+        merged.putAll(payload == null ? Map.of() : payload);
+
+        jdbcTemplate.update("""
+            UPDATE parse_task
+            SET parsed_course_json = :courseInfoJson,
+                updated_at = NOW()
+            WHERE id = :id
+            """, new MapSqlParameterSource()
+            .addValue("id", parseTaskId)
+            .addValue("courseInfoJson", writeJson(merged)));
+
+        return map("success", true, "parsedCourse", merged);
     }
 
     @SuppressWarnings("unchecked")
@@ -3283,9 +3652,23 @@ public class InMemoryCoaService {
         merged.put("credits", defaultDouble(submittedCourse.get("credits"), defaultDouble(parsedCourse.get("credits"), defaultDouble(currentCourse.get("credits"), 0D))));
         merged.put("prerequisiteCourse", defaultString(submittedCourse.get("prerequisiteCourse"), defaultString(parsedCourse.get("prerequisiteCourse"), defaultString(currentCourse.get("prerequisiteCourse"), ""))));
         merged.put("courseOwner", defaultString(submittedCourse.get("courseOwner"), defaultString(parsedCourse.get("courseOwner"), defaultString(currentCourse.get("courseOwner"), ""))));
+        merged.put("teachingContents", courseInfoValue(submittedCourse, parsedCourse, "teachingContents", new ArrayList<>()));
+        merged.put("assessmentDetails", courseInfoValue(submittedCourse, parsedCourse, "assessmentDetails", new ArrayList<>()));
+        merged.put("assessmentStandards", courseInfoValue(submittedCourse, parsedCourse, "assessmentStandards", new ArrayList<>()));
+        merged.put("assessmentPolicy", courseInfoValue(submittedCourse, parsedCourse, "assessmentPolicy", new LinkedHashMap<>()));
         merged.put("collegeId", nullableLong(currentCourse.get("collegeId")));
         merged.put("majorId", nullableLong(currentCourse.get("majorId")));
         return merged;
+    }
+
+    private Object courseInfoValue(Map<String, Object> submittedCourse, Map<String, Object> parsedCourse, String key, Object defaultValue) {
+        if (submittedCourse.containsKey(key)) {
+            return submittedCourse.get(key);
+        }
+        if (parsedCourse.containsKey(key)) {
+            return parsedCourse.get(key);
+        }
+        return defaultValue;
     }
 
     private Map<String, Object> getCourseMetaById(long courseId) {

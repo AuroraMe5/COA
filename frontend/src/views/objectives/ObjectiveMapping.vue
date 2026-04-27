@@ -1,6 +1,7 @@
 <template>
-  <div class="app-page page-stack">
+  <div class="app-page page-stack" :class="{ 'embedded-page': embedded }">
     <ModuleHeader
+      v-if="!embedded"
       title="教学目标管理"
       description="维护目标与考核项之间的贡献权重矩阵，为达成度核算提供直接输入。"
     >
@@ -9,7 +10,7 @@
       </template>
     </ModuleHeader>
 
-    <div class="filter-bar">
+    <div v-if="!embedded" class="filter-bar">
       <div class="filter-field">
         <label>课程</label>
         <select v-model="filters.courseId" class="select-input" @change="loadMapping">
@@ -66,6 +67,10 @@
         </table>
       </div>
     </PanelCard>
+
+    <div v-if="embedded" class="embedded-footer-actions">
+      <button class="btn btn-primary" @click="saveAll">保存映射矩阵</button>
+    </div>
   </div>
 </template>
 
@@ -75,6 +80,21 @@ import { getObjectiveMapping, saveObjectiveMapping } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+
+const props = defineProps({
+  embedded: {
+    type: Boolean,
+    default: false
+  },
+  initialCourseId: {
+    type: [String, Number],
+    default: ''
+  },
+  initialSemester: {
+    type: String,
+    default: ''
+  }
+})
 
 const catalogs = reactive({
   courses: [],
@@ -134,10 +154,24 @@ async function saveAll() {
   }
 }
 
-onMounted(loadMapping)
+onMounted(() => {
+  filters.courseId = props.initialCourseId || ''
+  filters.semester = props.initialSemester || ''
+  loadMapping()
+})
 </script>
 
 <style scoped>
+.embedded-page {
+  padding: 0;
+}
+
+.embedded-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
 .matrix-table {
   min-width: 980px;
 }

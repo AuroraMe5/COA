@@ -186,87 +186,116 @@
     </PanelCard>
 
     <PanelCard
-      v-if="showReviewPanel && hasExtendedExtraction"
+      v-if="showReviewPanel"
       title="大纲扩展提取内容"
-      subtitle="以下内容来自教学大纲后半段，用于核对教学内容、教学安排、考核说明和评价标准是否完整。"
+      subtitle="教学内容、成绩政策、考核要求和评价标准均可修改；确认写入前会一并保存。"
     >
-      <div v-if="parsedTeachingContents.length" class="mt-0">
-        <h3 class="section-subtitle">教学内容与学时安排</h3>
-        <table class="data-table compact-table">
-          <thead>
-            <tr>
-              <th>课程内容</th>
-              <th>讲授学时</th>
-              <th>上机学时</th>
-              <th>教学方式</th>
-              <th>覆盖目标</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in parsedTeachingContents" :key="item.title">
-              <td>{{ item.title }}</td>
-              <td>{{ item.lectureHours || '—' }}</td>
-              <td>{{ item.practiceHours || '—' }}</td>
-              <td>{{ item.teachingMethod || '—' }}</td>
-              <td>{{ item.relatedObjectives || '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <template #actions>
+        <button class="btn btn-light btn-mini" @click="addTeachingContent">新增教学内容</button>
+        <button class="btn btn-light btn-mini" @click="addAssessmentDetail">新增考核要求</button>
+        <button class="btn btn-primary btn-mini" @click="saveParsedCourseInfo()">保存扩展内容</button>
+      </template>
+
+      <div class="editable-section">
+        <div class="section-head">
+          <h3 class="section-subtitle">教学内容与学时安排</h3>
+          <button class="btn btn-light btn-mini" @click="addTeachingContent">新增</button>
+        </div>
+        <div v-if="parsedTeachingContents.length" class="table-shell">
+          <table class="data-table compact-table editable-table">
+            <thead>
+              <tr>
+                <th>课程内容</th>
+                <th>讲授</th>
+                <th>实践</th>
+                <th>教学方式</th>
+                <th>涉及目标</th>
+                <th>基本要求</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item, index) in parsedTeachingContents" :key="index">
+                <td><textarea v-model.trim="item.title" class="text-area mini-area" /></td>
+                <td><input v-model="item.lectureHours" class="text-input compact-input number-input" type="number" min="0" step="0.5" /></td>
+                <td><input v-model="item.practiceHours" class="text-input compact-input number-input" type="number" min="0" step="0.5" /></td>
+                <td><input v-model.trim="item.teachingMethod" class="text-input compact-input" /></td>
+                <td><input v-model.trim="item.relatedObjectives" class="text-input compact-input" /></td>
+                <td><textarea v-model.trim="item.requirements" class="text-area mini-area" /></td>
+                <td><button class="btn btn-danger btn-mini" @click="removeTeachingContent(index)">删除</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="notice warning">暂无教学内容，可点击新增补充。</div>
       </div>
 
-      <div v-if="hasAssessmentPolicy" class="mt-16">
+      <div class="editable-section mt-16">
         <h3 class="section-subtitle">成绩记载与考核政策</h3>
-        <div class="policy-grid">
+        <div class="policy-grid editable-policy-grid">
           <div>
             <span>成绩记载方式</span>
-            <strong>{{ parsedAssessmentPolicy.scoreRecordMode || '—' }}</strong>
+            <input v-model.trim="parsedAssessmentPolicy.scoreRecordMode" class="text-input compact-input" />
           </div>
           <div>
             <span>最终成绩组成</span>
-            <strong>{{ parsedAssessmentPolicy.finalGradeComposition || '—' }}</strong>
+            <textarea v-model.trim="parsedAssessmentPolicy.finalGradeComposition" class="text-area mini-area" />
           </div>
           <div>
             <span>考核方式</span>
-            <strong>{{ parsedAssessmentPolicy.assessmentMode || '—' }}</strong>
+            <input v-model.trim="parsedAssessmentPolicy.assessmentMode" class="text-input compact-input" />
           </div>
           <div>
             <span>是否设置补考</span>
-            <strong>{{ parsedAssessmentPolicy.makeupExam || '—' }}</strong>
+            <input v-model.trim="parsedAssessmentPolicy.makeupExam" class="text-input compact-input" />
           </div>
         </div>
       </div>
 
-      <div v-if="parsedAssessmentDetails.length" class="mt-16">
-        <h3 class="section-subtitle">考核要求与成绩评定</h3>
-        <table class="data-table compact-table">
-          <thead>
-            <tr>
-              <th>考核方式</th>
-              <th>权重</th>
-              <th>考核内容</th>
-              <th>评价办法</th>
-              <th>支撑要求</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in parsedAssessmentDetails" :key="item.name">
-              <td>{{ item.name }}</td>
-              <td>{{ formatPercentWeight(item.weight) }}</td>
-              <td>{{ item.content || '—' }}</td>
-              <td>{{ item.evaluationMethod || '—' }}</td>
-              <td>{{ item.supports || '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="editable-section mt-16">
+        <div class="section-head">
+          <h3 class="section-subtitle">考核要求与成绩评定</h3>
+          <button class="btn btn-light btn-mini" @click="addAssessmentDetail">新增</button>
+        </div>
+        <div v-if="parsedAssessmentDetails.length" class="table-shell">
+          <table class="data-table compact-table editable-table">
+            <thead>
+              <tr>
+                <th>考核方式</th>
+                <th>权重</th>
+                <th>考核内容</th>
+                <th>评价办法</th>
+                <th>支撑要求</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item, index) in parsedAssessmentDetails" :key="index">
+                <td><input v-model.trim="item.name" class="text-input compact-input" /></td>
+                <td><input v-model="item.weight" class="text-input compact-input number-input" type="number" min="0" max="100" step="0.01" /></td>
+                <td><textarea v-model.trim="item.content" class="text-area mini-area" /></td>
+                <td><textarea v-model.trim="item.evaluationMethod" class="text-area mini-area" /></td>
+                <td><textarea v-model.trim="item.supports" class="text-area mini-area" /></td>
+                <td><button class="btn btn-danger btn-mini" @click="removeAssessmentDetail(index)">删除</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="notice warning">暂无考核要求，可点击新增补充。</div>
       </div>
 
-      <div v-if="parsedAssessmentStandards.length" class="mt-16">
-        <h3 class="section-subtitle">考核与评价标准片段</h3>
-        <div class="standard-list">
-          <div v-for="(item, index) in parsedAssessmentStandards" :key="`${index}-${item}`" class="standard-line">
-            {{ item }}
+      <div class="editable-section mt-16">
+        <div class="section-head">
+          <h3 class="section-subtitle">考核与评价标准片段</h3>
+          <button class="btn btn-light btn-mini" @click="addAssessmentStandard">新增</button>
+        </div>
+        <div v-if="parsedAssessmentStandards.length" class="standard-list">
+          <div v-for="(item, index) in parsedAssessmentStandards" :key="index" class="standard-editor">
+            <textarea v-model.trim="parsedAssessmentStandards[index]" class="text-area" />
+            <button class="btn btn-danger btn-mini" @click="removeAssessmentStandard(index)">删除</button>
           </div>
         </div>
+        <div v-else class="notice warning">暂无评价标准片段，可点击新增补充。</div>
       </div>
     </PanelCard>
 
@@ -511,6 +540,7 @@ import {
   getParseTaskDetail,
   getReferenceCatalogs,
   updateParseAssessDraft,
+  updateParseCourseInfo,
   updateParseDraft,
   updateParseMappingMatrix,
   uploadParseFile
@@ -571,17 +601,11 @@ const currentStep = computed(() => {
 })
 
 const showReviewPanel = computed(() => task.value && ['DONE', 'CONFIRMED'].includes(task.value.status))
-const parsedCourse = computed(() => task.value?.parsedCourse || {})
-const parsedTeachingContents = computed(() => parsedCourse.value.teachingContents || [])
-const parsedAssessmentDetails = computed(() => parsedCourse.value.assessmentDetails || [])
-const parsedAssessmentStandards = computed(() => parsedCourse.value.assessmentStandards || [])
-const parsedAssessmentPolicy = computed(() => parsedCourse.value.assessmentPolicy || {})
-const hasAssessmentPolicy = computed(() =>
-  Object.values(parsedAssessmentPolicy.value).some((value) => String(value || '').trim())
-)
-const hasExtendedExtraction = computed(() =>
-  parsedTeachingContents.value.length || parsedAssessmentDetails.value.length || parsedAssessmentStandards.value.length || hasAssessmentPolicy.value
-)
+const parsedCourse = computed(() => ensureParsedCourseShape())
+const parsedTeachingContents = computed(() => parsedCourse.value.teachingContents)
+const parsedAssessmentDetails = computed(() => parsedCourse.value.assessmentDetails)
+const parsedAssessmentStandards = computed(() => parsedCourse.value.assessmentStandards)
+const parsedAssessmentPolicy = computed(() => parsedCourse.value.assessmentPolicy)
 
 const selectedTargetCourse = computed(() =>
   catalogs.courses.find((c) => String(c.id) === String(overwriteTargetCourseId.value)) || null
@@ -723,10 +747,156 @@ function createObjective() {
   })
 }
 
+function emptyParsedCourseInfo() {
+  return {
+    teachingContents: [],
+    assessmentDetails: [],
+    assessmentStandards: [],
+    assessmentPolicy: {
+      scoreRecordMode: '',
+      finalGradeComposition: '',
+      assessmentMode: '',
+      makeupExam: ''
+    }
+  }
+}
+
+function ensureParsedCourseShape() {
+  if (!task.value) {
+    return emptyParsedCourseInfo()
+  }
+
+  if (!task.value.parsedCourse || typeof task.value.parsedCourse !== 'object') {
+    task.value.parsedCourse = {}
+  }
+
+  const course = task.value.parsedCourse
+  if (!Array.isArray(course.teachingContents)) {
+    course.teachingContents = []
+  }
+  if (!Array.isArray(course.assessmentDetails)) {
+    course.assessmentDetails = []
+  }
+  if (!Array.isArray(course.assessmentStandards)) {
+    course.assessmentStandards = []
+  }
+  if (!course.assessmentPolicy || typeof course.assessmentPolicy !== 'object' || Array.isArray(course.assessmentPolicy)) {
+    course.assessmentPolicy = {}
+  }
+
+  if (course.assessmentPolicy.scoreRecordMode == null) {
+    course.assessmentPolicy.scoreRecordMode = ''
+  }
+  if (course.assessmentPolicy.finalGradeComposition == null) {
+    course.assessmentPolicy.finalGradeComposition = ''
+  }
+  if (course.assessmentPolicy.assessmentMode == null) {
+    course.assessmentPolicy.assessmentMode = ''
+  }
+  if (course.assessmentPolicy.makeupExam == null) {
+    course.assessmentPolicy.makeupExam = ''
+  }
+  return course
+}
+
 function initParsedCourseEdits(parsedCourse) {
   courseFields.forEach((field) => {
     parsedCourseEdits[field.key] = parsedCourse?.[field.key] != null ? String(parsedCourse[field.key]) : ''
   })
+}
+
+function addTeachingContent() {
+  parsedTeachingContents.value.push({
+    title: '',
+    lectureHours: '',
+    practiceHours: '',
+    teachingMethod: '',
+    relatedObjectives: '',
+    requirements: ''
+  })
+}
+
+function removeTeachingContent(index) {
+  parsedTeachingContents.value.splice(index, 1)
+}
+
+function addAssessmentDetail() {
+  parsedAssessmentDetails.value.push({
+    name: '',
+    weight: '',
+    content: '',
+    evaluationMethod: '',
+    supports: ''
+  })
+}
+
+function removeAssessmentDetail(index) {
+  parsedAssessmentDetails.value.splice(index, 1)
+}
+
+function addAssessmentStandard() {
+  parsedAssessmentStandards.value.push('')
+}
+
+function removeAssessmentStandard(index) {
+  parsedAssessmentStandards.value.splice(index, 1)
+}
+
+function buildSubmittedCourseInfo() {
+  const course = ensureParsedCourseShape()
+  const baseInfo = courseFields.reduce((result, field) => {
+    result[field.key] = parsedCourseEdits[field.key] ?? ''
+    return result
+  }, {})
+
+  return {
+    ...course,
+    ...baseInfo,
+    teachingContents: parsedTeachingContents.value.map((item) => ({
+      title: item.title || '',
+      lectureHours: item.lectureHours ?? '',
+      practiceHours: item.practiceHours ?? '',
+      teachingMethod: item.teachingMethod || '',
+      relatedObjectives: item.relatedObjectives || '',
+      requirements: item.requirements || ''
+    })),
+    assessmentDetails: parsedAssessmentDetails.value.map((item) => ({
+      name: item.name || '',
+      weight: item.weight ?? '',
+      content: item.content || '',
+      evaluationMethod: item.evaluationMethod || '',
+      supports: item.supports || ''
+    })),
+    assessmentStandards: parsedAssessmentStandards.value.map((item) => String(item || '')),
+    assessmentPolicy: {
+      scoreRecordMode: parsedAssessmentPolicy.value.scoreRecordMode || '',
+      finalGradeComposition: parsedAssessmentPolicy.value.finalGradeComposition || '',
+      assessmentMode: parsedAssessmentPolicy.value.assessmentMode || '',
+      makeupExam: parsedAssessmentPolicy.value.makeupExam || ''
+    }
+  }
+}
+
+async function saveParsedCourseInfo(successText = '扩展提取内容已保存。', throwOnError = false) {
+  if (!task.value?.taskId) return buildSubmittedCourseInfo()
+
+  const courseInfo = buildSubmittedCourseInfo()
+  try {
+    const result = await updateParseCourseInfo(task.value.taskId, courseInfo)
+    task.value.parsedCourse = result.parsedCourse || courseInfo
+    ensureParsedCourseShape()
+    initParsedCourseEdits(task.value.parsedCourse)
+    if (successText) {
+      setMessage('success', successText)
+    }
+    return task.value.parsedCourse
+  } catch (error) {
+    setMessage('error', error.message || '扩展提取内容保存失败。')
+    if (throwOnError) {
+      throw error
+    }
+    return courseInfo
+  }
 }
 
 function toggleOverwriteField(key) {
@@ -740,12 +910,6 @@ function toggleOverwriteField(key) {
 function formatCourseValue(value) {
   if (value === null || value === undefined || value === '') return ''
   return String(value)
-}
-
-function formatPercentWeight(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return '—'
-  return `${number.toFixed(Math.abs(number - Math.round(number)) < 0.001 ? 0 : 2)}%`
 }
 
 function confidenceTone(level) {
@@ -803,6 +967,7 @@ function stopPolling() {
 async function pollTask(taskId) {
   const data = await getParseTaskDetail(taskId)
   task.value = data
+  ensureParsedCourseShape()
 
   if (data.status === 'DONE') {
     stopPolling()
@@ -1118,13 +1283,14 @@ async function confirmTask() {
 
   try {
     await saveAllReviewDrafts()
+    const submittedCourseInfo = await saveParsedCourseInfo('', true)
     const result = await confirmParseTask(task.value.taskId, {
       outlineId: task.value.outlineId,
       overwrite: courseImportMode.value === 'overwrite' && overwriteExisting.value,
       courseImportMode: courseImportMode.value,
       targetCourseId: courseImportMode.value === 'overwrite' ? overwriteTargetCourseId.value : null,
       overwriteCourseFields: courseImportMode.value === 'overwrite' ? [...overwriteFields] : [],
-      courseInfo: { ...parsedCourseEdits }
+      courseInfo: submittedCourseInfo
     })
 
     await refreshTask()
@@ -1297,9 +1463,46 @@ onBeforeUnmount(() => {
   vertical-align: top;
 }
 
+.editable-section {
+  display: grid;
+  gap: 10px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.editable-table {
+  min-width: 980px;
+}
+
+.editable-table td {
+  min-width: 120px;
+}
+
+.mini-area {
+  min-height: 64px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.number-input {
+  min-width: 76px;
+}
+
 .standard-list {
   display: grid;
   gap: 8px;
+}
+
+.standard-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
 }
 
 .standard-line {
@@ -1322,6 +1525,11 @@ onBeforeUnmount(() => {
   border: 1px solid #e6eef2;
   border-radius: 8px;
   background: #fbfdfe;
+}
+
+.editable-policy-grid > div {
+  display: grid;
+  gap: 6px;
 }
 
 .policy-grid span {
@@ -1347,6 +1555,10 @@ onBeforeUnmount(() => {
 
 @media (max-width: 720px) {
   .policy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .standard-editor {
     grid-template-columns: 1fr;
   }
 }

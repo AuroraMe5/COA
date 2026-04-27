@@ -23,6 +23,7 @@ DROP TABLE IF EXISTS `grade_import_batch`;
 DROP TABLE IF EXISTS `parse_assess_item_draft`;
 DROP TABLE IF EXISTS `parse_objective_draft`;
 DROP TABLE IF EXISTS `parse_task`;
+DROP TABLE IF EXISTS `course_teaching_content`;
 DROP TABLE IF EXISTS `obj_assess_map`;
 DROP TABLE IF EXISTS `assess_item`;
 DROP TABLE IF EXISTS `obj_decompose`;
@@ -138,9 +139,14 @@ CREATE TABLE `base_course` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '课程ID',
   `course_code` VARCHAR(30) NOT NULL COMMENT '课程代码',
   `course_name` VARCHAR(100) NOT NULL COMMENT '课程名称',
+  `course_name_en` VARCHAR(255) DEFAULT NULL COMMENT '课程英文名称',
   `credits` DECIMAL(3,1) DEFAULT NULL COMMENT '学分',
   `hours` INT DEFAULT NULL COMMENT '学时',
   `course_type` VARCHAR(20) DEFAULT NULL COMMENT '课程类型：理论/实践/综合',
+  `target_students` VARCHAR(255) DEFAULT NULL COMMENT '授课对象',
+  `teaching_language` VARCHAR(100) DEFAULT NULL COMMENT '授课语言',
+  `prerequisite_course` VARCHAR(255) DEFAULT NULL COMMENT '先修课程',
+  `course_owner` VARCHAR(100) DEFAULT NULL COMMENT '课程负责人',
   `college_id` BIGINT NOT NULL COMMENT '开课学院ID',
   `major_id` BIGINT DEFAULT NULL COMMENT '所属专业ID',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
@@ -192,6 +198,26 @@ CREATE TABLE `outline_main` (
   CONSTRAINT `fk_outline_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`),
   CONSTRAINT `fk_outline_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='课程大纲表';
+
+CREATE TABLE `course_teaching_content` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '教学内容ID',
+  `course_id` BIGINT NOT NULL COMMENT '课程ID',
+  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
+  `title` VARCHAR(255) NOT NULL COMMENT '教学内容',
+  `lecture_hours` DECIMAL(5,1) DEFAULT NULL COMMENT '讲授学时',
+  `practice_hours` DECIMAL(5,1) DEFAULT NULL COMMENT '实践学时',
+  `teaching_method` VARCHAR(100) DEFAULT NULL COMMENT '教学方式',
+  `related_objectives` VARCHAR(255) DEFAULT NULL COMMENT '涉及课程目标',
+  `requirements` TEXT DEFAULT NULL COMMENT '基本要求',
+  `source_text` TEXT DEFAULT NULL COMMENT '来源原文',
+  `sort_order` INT NOT NULL DEFAULT 0 COMMENT '排序号',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_course_teaching_scope` (`course_id`, `semester_id`, `sort_order`),
+  CONSTRAINT `fk_course_teaching_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_course_teaching_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='课程教学内容表';
 
 CREATE TABLE `teach_objective` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '教学目标ID',

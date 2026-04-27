@@ -40,11 +40,8 @@ const menuGroups = [
   {
     title: '教学目标管理',
     items: [
-      { label: '课程大纲管理', to: '/objectives/outlines' },
-      { label: '教学目标列表', to: '/objectives/list' },
-      { label: '目标分解与权重', to: '/objectives/weights' },
-      { label: '智能解析导入', to: '/objectives/parse-import' },
-      { label: '目标考核映射', to: '/objectives/mapping' }
+      { label: '课程管理', to: '/objectives/outlines' },
+      { label: '智能解析导入', to: '/objectives/parse-import' }
     ]
   },
   {
@@ -63,9 +60,9 @@ const menuGroups = [
 ]
 
 function isActive(path) {
-  // 编辑页不单独出现在侧边栏，仍归到“教学目标列表”入口。
+  // 编辑页不单独出现在侧边栏，仍归到“课程管理”入口。
   if (
-    path === '/objectives/list' &&
+    path === '/objectives/outlines' &&
     route.path.startsWith('/objectives/edit')
   ) {
     return true

@@ -1,24 +1,11 @@
 export const objectiveManageTabs = [
   {
-    label: '课程大纲管理',
+    label: '课程管理',
     to: '/objectives/outlines'
-  },
-  {
-    label: '教学目标列表',
-    to: '/objectives/list',
-    matches: ['/objectives/list', '/objectives/edit']
-  },
-  {
-    label: '目标分解与权重',
-    to: '/objectives/weights'
   },
   {
     label: '智能解析导入',
     to: '/objectives/parse-import'
-  },
-  {
-    label: '目标考核映射',
-    to: '/objectives/mapping'
   }
 ]
 

@@ -1,6 +1,7 @@
 <template>
-  <div class="app-page page-stack">
+  <div class="app-page page-stack" :class="{ 'embedded-page': embedded }">
     <ModuleHeader
+      v-if="!embedded"
       title="教学目标管理"
       description="将目标分解与权重从原有独立页面并入教学目标管理模块。这里用于集中校验目标层与分解点层的权重配置。"
     >
@@ -9,7 +10,7 @@
       </template>
     </ModuleHeader>
 
-    <div class="filter-bar">
+    <div v-if="!embedded" class="filter-bar">
       <div class="filter-field">
         <label>课程</label>
         <select v-model="filters.courseId" class="select-input" @change="loadWeights">
@@ -89,6 +90,10 @@
         </div>
       </div>
     </PanelCard>
+
+    <div v-if="embedded" class="embedded-footer-actions">
+      <button class="btn btn-primary" @click="saveAll">保存权重配置</button>
+    </div>
   </div>
 </template>
 
@@ -98,6 +103,21 @@ import { getObjectiveWeights, saveObjectiveWeights } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+
+const props = defineProps({
+  embedded: {
+    type: Boolean,
+    default: false
+  },
+  initialCourseId: {
+    type: [String, Number],
+    default: ''
+  },
+  initialSemester: {
+    type: String,
+    default: ''
+  }
+})
 
 const catalogs = reactive({
   courses: [],
@@ -171,10 +191,24 @@ async function saveAll() {
   }
 }
 
-onMounted(loadWeights)
+onMounted(() => {
+  filters.courseId = props.initialCourseId || ''
+  filters.semester = props.initialSemester || ''
+  loadWeights()
+})
 </script>
 
 <style scoped>
+.embedded-page {
+  padding: 0;
+}
+
+.embedded-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
 .weight-card {
   padding: 16px;
   border-radius: var(--radius-md);

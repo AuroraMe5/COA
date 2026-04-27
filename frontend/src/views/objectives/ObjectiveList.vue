@@ -1,6 +1,7 @@
 <template>
-  <div class="app-page page-stack">
+  <div class="app-page page-stack" :class="{ 'embedded-page': embedded }">
     <ModuleHeader
+      v-if="!embedded"
       title="教学目标管理"
       description="将教学目标录入、目标分解与权重配置、智能解析导入整合到同一模块中，便于教师按手工维护与智能辅助两条路径协同完成目标建设。"
     >
@@ -9,7 +10,7 @@
       </template>
     </ModuleHeader>
 
-    <div class="filter-bar">
+    <div v-if="!embedded" class="filter-bar">
       <div class="filter-field">
         <label>课程</label>
         <select v-model="filters.courseId" class="select-input" @change="loadObjectives">
@@ -43,6 +44,10 @@
       title="教学目标列表"
       subtitle="从这里进入新增与编辑流程；目标分解、权重配置和智能解析入口统一放在左侧侧边栏。"
     >
+      <template v-if="embedded" #actions>
+        <button class="btn btn-primary" @click="createObjective">新增教学目标</button>
+      </template>
+
       <EmptyState
         v-if="!objectives.length"
         mark="目"
@@ -92,6 +97,21 @@ import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 
+const props = defineProps({
+  embedded: {
+    type: Boolean,
+    default: false
+  },
+  initialCourseId: {
+    type: [String, Number],
+    default: ''
+  },
+  initialSemester: {
+    type: String,
+    default: ''
+  }
+})
+
 const router = useRouter()
 
 const catalogs = reactive({
@@ -139,5 +159,15 @@ async function loadObjectives() {
   objectives.value = data.items
 }
 
-onMounted(loadObjectives)
+onMounted(() => {
+  filters.courseId = props.initialCourseId || ''
+  filters.semester = props.initialSemester || ''
+  loadObjectives()
+})
 </script>
+
+<style scoped>
+.embedded-page {
+  padding: 0;
+}
+</style>

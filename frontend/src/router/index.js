@@ -41,7 +41,7 @@ const routes = [
         path: 'objectives/outlines',
         name: 'outlines',
         component: OutlineManage,
-        meta: { title: '课程大纲管理' }
+        meta: { title: '课程管理' }
       },
       {
         path: 'objectives/list',

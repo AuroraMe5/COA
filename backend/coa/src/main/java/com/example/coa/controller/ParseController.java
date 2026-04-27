@@ -75,6 +75,11 @@ public class ParseController {
         return coaService.updateParseMappingMatrix(taskId, payload);
     }
 
+    @PutMapping("/tasks/{taskId}/course-info")
+    public Map<String, Object> updateParseCourseInfo(@PathVariable String taskId, @RequestBody Map<String, Object> payload) {
+        return coaService.updateParseCourseInfo(taskId, payload);
+    }
+
     @PostMapping("/tasks/{taskId}/confirm")
     public Map<String, Object> confirmParseTask(@PathVariable String taskId, @RequestBody Map<String, Object> payload) {
         return coaService.confirmParseTask(taskId, payload);

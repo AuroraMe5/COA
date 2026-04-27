@@ -146,6 +146,18 @@ export function getReferenceCatalogs() {
   return getData('/reference/catalogs')
 }
 
+export function getCourseDetail(id, params) {
+  return getData(`/courses/${id}`, { params })
+}
+
+export function updateCourse(id, payload) {
+  return putData(`/courses/${id}`, payload)
+}
+
+export function updateCourseTeachingContents(id, semester, payload) {
+  return putData(`/courses/${id}/teaching-contents`, payload, { params: { semester } })
+}
+
 export function getDashboardData(params) {
   return getData('/analysis/dashboard', { params })
 }
@@ -234,6 +246,10 @@ export function deleteParseAssessDraft(id) {
 
 export function updateParseMappingMatrix(taskId, payload) {
   return putData(`/parse/tasks/${taskId}/mapping`, payload)
+}
+
+export function updateParseCourseInfo(taskId, payload) {
+  return putData(`/parse/tasks/${taskId}/course-info`, payload)
 }
 
 export function confirmParseTask(taskId, payload) {
