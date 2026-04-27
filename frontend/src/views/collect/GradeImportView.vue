@@ -1,85 +1,66 @@
 <template>
   <div class="app-page page-stack">
-    <ModuleHeader
-      title="数据采集"
-      description="数据采集模块聚焦学生信息与成绩数据，批量导入结果将直接用于课程目标达成度核算。"
-    />
-
-    <div class="step-row">
-      <div class="step-card" :class="{ active: step >= 1 }">
-        <div class="step-index">1</div>
-        <strong class="mt-12">选择课程</strong>
-      </div>
-      <div class="step-card" :class="{ active: step >= 2 }">
-        <div class="step-index">2</div>
-        <strong class="mt-12">上传文件</strong>
-      </div>
-      <div class="step-card" :class="{ active: step >= 3 }">
-        <div class="step-index">3</div>
-        <strong class="mt-12">数据校验</strong>
-      </div>
-      <div class="step-card" :class="{ active: step >= 4 }">
-        <div class="step-index">4</div>
-        <strong class="mt-12">确认导入</strong>
-      </div>
-    </div>
+    <ModuleHeader title="成绩批量导入" />
 
     <div v-if="message.text" class="notice" :class="message.type">{{ message.text }}</div>
 
-    <PanelCard title="导入参数" subtitle="支持 xls、xlsx、csv 成绩文件。系统会按当前课程本学期的考核项自动匹配成绩列。">
-      <div class="form-grid-2">
+    <PanelCard title="导入参数">
+      <div class="form-grid-4">
+        <div class="form-field">
+          <label>班级</label>
+          <select v-model="form.classId" class="select-input" @change="handleClassChange">
+            <option value="">不限定班级</option>
+            <option v-for="item in catalogs.classes" :key="item.id" :value="item.id">{{ item.className }}</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>学期</label>
+          <select v-model="form.semester" class="select-input" @change="handleSemesterChange">
+            <option v-for="semester in catalogs.semesters" :key="semester" :value="semester">{{ semester }}</option>
+          </select>
+        </div>
         <div class="form-field">
           <label>课程</label>
           <select v-model="form.courseId" class="select-input">
-            <option v-for="course in catalogs.courses" :key="course.id" :value="course.id">
+            <option value="">请选择课程</option>
+            <option v-for="course in courseOptions" :key="course.id" :value="course.id">
               {{ course.name }}（{{ course.code }}）
             </option>
           </select>
         </div>
         <div class="form-field">
-          <label>学期</label>
-          <select v-model="form.semester" class="select-input">
-            <option v-for="semester in catalogs.semesters" :key="semester" :value="semester">
-              {{ semester }}
-            </option>
-          </select>
+          <label>成绩文件</label>
+          <input type="file" accept=".xlsx,.xls,.csv" @change="handleFileChange" />
         </div>
       </div>
 
-      <div class="mt-16">
-        <strong>当前课程考核项</strong>
-        <div v-if="filteredAssessItems.length" class="assess-chip-grid mt-12">
-          <div v-for="item in filteredAssessItems" :key="item.id" class="assess-chip">
-            <span>{{ item.itemName }}</span>
-            <small>{{ item.itemTypeName || itemTypeLabel(item.itemType) }} · 权重 {{ item.weight }}%</small>
-          </div>
+      <div class="assess-chip-grid mt-16">
+        <div v-for="item in filteredAssessItems" :key="item.id" class="assess-chip">
+          <span>{{ item.itemName }}</span>
+          <small>{{ item.itemTypeName }} · 权重 {{ item.weight }}%</small>
         </div>
-        <div v-else class="notice warning mt-12">
-          当前课程本学期尚未配置考核项，请先在教学目标管理中维护后再导入成绩。
+        <div v-if="form.courseId && form.semester && !filteredAssessItems.length" class="notice warning">
+          当前课程本学期尚未配置考核项。
         </div>
       </div>
 
       <div class="actions-inline mt-16">
-        <input type="file" accept=".xlsx,.xls,.csv" @change="handleFileChange" />
         <button class="btn btn-secondary" :disabled="uploading" @click="handleUpload">
-          {{ uploading ? '上传中...' : '上传并创建批次' }}
+          {{ uploading ? '上传中...' : '上传并创建成绩批次' }}
         </button>
       </div>
     </PanelCard>
 
-    <PanelCard v-if="batch" title="导入批次状态" :subtitle="`批次号：${batch.batchId}`">
+    <PanelCard v-if="batch" title="成绩导入批次">
       <div class="info-strip">
-        <div>文件：{{ batch.fileName }}</div>
+        <div>文件：{{ batch.fileName || '—' }}</div>
         <div>状态：{{ batchStatusLabel(batch.status) }}</div>
         <div>有效行：{{ batch.validRows || 0 }}</div>
         <div>异常行：{{ batch.errorRows || 0 }}</div>
       </div>
     </PanelCard>
 
-    <PanelCard
-      v-if="batch && batch.status === 'PARSED'"
-      title="校验预览结果"
-    >
+    <PanelCard v-if="batch && batch.status === 'PARSED'" title="成绩预览">
       <div class="table-shell grade-preview-shell">
         <table class="data-table grade-preview-table">
           <thead>
@@ -96,11 +77,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="row in batch.previewRows || []"
-              :key="`${row.row}-${row.studentNo}`"
-              :class="{ 'invalid-row': !row.valid }"
-            >
+            <tr v-for="row in batch.previewRows || []" :key="`${row.row}-${row.studentNo}`" :class="{ 'invalid-row': !row.valid }">
               <td class="sticky-col row-col">{{ row.row }}</td>
               <td class="sticky-col student-col">
                 <input v-model.trim="row.studentNo" class="text-input preview-input student-input" />
@@ -122,6 +99,7 @@
               </td>
               <td class="status-col">
                 <span v-if="!row.valid" class="status-text-error">异常</span>
+                <span v-else class="metric">有效</span>
               </td>
               <td class="action-col">
                 <button class="btn btn-secondary btn-compact" :disabled="savingRow === row.row" @click="savePreviewRow(row)">
@@ -144,6 +122,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   confirmGradeBatch,
+  getClassCourses,
   getGradeBatchPreview,
   getReferenceCatalogs,
   updateGradePreviewRow,
@@ -152,40 +131,32 @@ import {
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 
-const catalogs = reactive({
-  courses: [],
-  semesters: [],
-  assessItems: []
-})
-
-const form = reactive({
-  courseId: '',
-  semester: ''
-})
-
+const catalogs = reactive({ courses: [], semesters: [], assessItems: [], classes: [] })
+const classCourses = ref([])
 const selectedFile = ref(null)
 const uploading = ref(false)
 const savingRow = ref(null)
 const batch = ref(null)
-const message = reactive({
-  type: 'success',
-  text: ''
-})
-
+const message = reactive({ type: 'success', text: '' })
 let pollingTimer = null
+
+const form = reactive({ classId: '', semester: '', courseId: '' })
+
+const courseOptions = computed(() => {
+  if (!form.classId) return catalogs.courses
+  const courseIds = new Set(
+    classCourses.value
+      .filter((item) => String(item.classId) === String(form.classId) && String(item.semester) === String(form.semester))
+      .map((item) => String(item.courseId))
+  )
+  return courseIds.size ? catalogs.courses.filter((course) => courseIds.has(String(course.id))) : catalogs.courses
+})
 
 const filteredAssessItems = computed(() =>
   catalogs.assessItems.filter(
-    (item) => Number(item.courseId) === Number(form.courseId) && String(item.semester) === String(form.semester)
+    (item) => String(item.courseId) === String(form.courseId) && String(item.semester) === String(form.semester)
   )
 )
-
-const step = computed(() => {
-  if (!batch.value) return 1
-  if (batch.value.status === 'PARSING') return 3
-  if (batch.value.status === 'PARSED') return 4
-  return 4
-})
 
 function setMessage(type, text) {
   message.type = type
@@ -196,13 +167,20 @@ function handleFileChange(event) {
   selectedFile.value = event.target.files?.[0] || null
 }
 
-function itemTypeLabel(type) {
-  if (type === 'normal') return '平时'
-  if (type === 'mid') return '期中'
-  if (type === 'final') return '期末'
-  if (type === 'practice') return '实践'
-  if (type === 'report') return '报告'
-  return '其他'
+async function handleClassChange() {
+  await loadClassCourses()
+  pickDefaultCourse()
+}
+
+async function handleSemesterChange() {
+  await loadClassCourses()
+  pickDefaultCourse()
+}
+
+function pickDefaultCourse() {
+  if (!courseOptions.value.some((item) => String(item.id) === String(form.courseId))) {
+    form.courseId = courseOptions.value[0]?.id || ''
+  }
 }
 
 function batchStatusLabel(status) {
@@ -221,17 +199,11 @@ function stopPolling() {
 }
 
 async function pollBatch(batchId) {
-  try {
-    const data = await getGradeBatchPreview(batchId)
-    batch.value = data
-    if (data.status === 'PARSED') {
-      stopPolling()
-      setMessage('success', '导入文件已解析完成，请核对预览结果并确认导入。')
-    }
-  } catch (error) {
+  const data = await getGradeBatchPreview(batchId)
+  batch.value = data
+  if (data.status === 'PARSED') {
     stopPolling()
-    setMessage('error', error.message || '预览结果读取失败，请稍后重试。')
-    throw error
+    setMessage('success', '成绩文件已解析完成。')
   }
 }
 
@@ -240,52 +212,30 @@ async function handleUpload() {
     setMessage('error', '请先选择成绩文件。')
     return
   }
-  const lowerName = selectedFile.value.name.toLowerCase()
-  if (!['.xls', '.xlsx', '.csv'].some((ext) => lowerName.endsWith(ext))) {
-    setMessage('error', '仅支持上传 xls、xlsx 或 csv 格式的成绩文件。')
+  if (!form.courseId || !form.semester) {
+    setMessage('error', '请选择课程和学期。')
     return
   }
   if (!filteredAssessItems.value.length) {
     setMessage('error', '当前课程本学期尚未配置考核项，无法导入成绩。')
     return
   }
-
   uploading.value = true
-  setMessage('', '')
-
   try {
     const created = await uploadGradeFile({
       file: selectedFile.value,
       courseId: form.courseId,
+      classId: form.classId,
       semester: form.semester
     })
-    batch.value = {
-      batchId: created.batchId,
-      status: created.status
-    }
-    setMessage('success', '导入批次已创建，系统正在轮询解析结果。')
+    batch.value = { batchId: created.batchId, status: created.status }
     stopPolling()
     pollingTimer = window.setInterval(() => pollBatch(created.batchId), 1000)
     await pollBatch(created.batchId)
   } catch (error) {
-    setMessage('error', error.message || '导入批次创建失败。')
+    setMessage('error', error.message || '成绩导入批次创建失败。')
   } finally {
     uploading.value = false
-  }
-}
-
-async function confirmImport() {
-  try {
-    const result = await confirmGradeBatch(batch.value.batchId, { importMode: 'valid_only' })
-    if (batch.value) {
-      batch.value.status = 'CONFIRMED'
-    }
-    setMessage(
-      'success',
-      `导入完成：已写入 ${result.importedCount} 条有效成绩，跳过 ${result.skippedCount} 条异常数据。`
-    )
-  } catch (error) {
-    setMessage('error', error.message || '成绩导入失败。')
   }
 }
 
@@ -311,13 +261,34 @@ async function savePreviewRow(row) {
   }
 }
 
+async function confirmImport() {
+  try {
+    const result = await confirmGradeBatch(batch.value.batchId, { importMode: 'valid_only' })
+    batch.value.status = 'CONFIRMED'
+    setMessage('success', `导入完成：已写入 ${result.importedCount} 条有效成绩，跳过 ${result.skippedCount} 条异常数据。`)
+  } catch (error) {
+    setMessage('error', error.message || '成绩导入失败。')
+  }
+}
+
+async function loadClassCourses() {
+  const data = await getClassCourses({
+    classId: form.classId || undefined,
+    semester: form.semester || undefined
+  })
+  classCourses.value = data.items || []
+}
+
 async function loadCatalogs() {
   const data = await getReferenceCatalogs()
-  catalogs.courses = data.courses
-  catalogs.semesters = data.semesters
-  catalogs.assessItems = data.assessItems
-  form.courseId = data.courses[0]?.id || ''
-  form.semester = data.semesters[0] || ''
+  catalogs.courses = data.courses || []
+  catalogs.semesters = data.semesters || []
+  catalogs.assessItems = data.assessItems || []
+  catalogs.classes = data.classes || []
+  form.semester = catalogs.semesters[0] || ''
+  form.courseId = catalogs.courses[0]?.id || ''
+  await loadClassCourses()
+  pickDefaultCourse()
 }
 
 onMounted(loadCatalogs)
@@ -325,6 +296,12 @@ onBeforeUnmount(stopPolling)
 </script>
 
 <style scoped>
+.form-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .assess-chip-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -462,7 +439,21 @@ onBeforeUnmount(stopPolling)
 }
 
 .btn-compact {
-  padding: 8px 12px;
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
   white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .form-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 780px) {
+  .form-grid-4 {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

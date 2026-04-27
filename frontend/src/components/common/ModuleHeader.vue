@@ -3,7 +3,7 @@
     <div class="page-title">
       <div>
         <h1>{{ title }}</h1>
-        <p>{{ description }}</p>
+        <p v-if="description">{{ description }}</p>
       </div>
       <div v-if="$slots.actions" class="toolbar">
         <slot name="actions" />

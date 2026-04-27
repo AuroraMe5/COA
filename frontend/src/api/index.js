@@ -158,6 +158,10 @@ export function updateCourseTeachingContents(id, semester, payload) {
   return putData(`/courses/${id}/teaching-contents`, payload, { params: { semester } })
 }
 
+export function updateCourseAssessItems(id, semester, payload) {
+  return putData(`/courses/${id}/assess-items`, payload, { params: { semester } })
+}
+
 export function getDashboardData(params) {
   return getData('/analysis/dashboard', { params })
 }
@@ -271,7 +275,43 @@ export function deleteImportedGradeRow(params) {
 
 // 成绩导入
 export function uploadGradeFile(payload) {
-  return postFormData('/collect/grades/upload', payload, ['file', 'courseId', 'semester'])
+  return postFormData('/collect/grades/upload', payload, ['file', 'courseId', 'classId', 'semester'])
+}
+
+export function getClasses(params) {
+  return getData('/collect/classes', { params })
+}
+
+export function saveClass(payload) {
+  return saveById('/collect/classes', payload)
+}
+
+export function getClassStudents(classId, params) {
+  return getData(`/collect/classes/${classId}/students`, { params })
+}
+
+export function uploadStudents(classId, payload) {
+  return postFormData(`/collect/classes/${classId}/students/upload`, payload, ['file'])
+}
+
+export function saveStudent(payload) {
+  return saveById('/collect/students', payload)
+}
+
+export function deleteStudent(id) {
+  return request.delete(`/collect/students/${id}`).then(({ data }) => data)
+}
+
+export function getClassCourses(params) {
+  return getData('/collect/class-courses', { params })
+}
+
+export function saveClassCourse(payload) {
+  return postData('/collect/class-courses', payload)
+}
+
+export function deleteClassCourse(id) {
+  return request.delete(`/collect/class-courses/${id}`).then(({ data }) => data)
 }
 
 export function getGradeBatchPreview(batchId) {

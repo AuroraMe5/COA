@@ -62,7 +62,11 @@ class OutlineParseEngineTest {
         assertTrue(parsed.courseInfo().assessmentPolicy().finalGradeComposition().contains("平时作业(20%)"));
         assertEquals("考试 / 非标", parsed.courseInfo().assessmentPolicy().assessmentMode());
         assertEquals("否", parsed.courseInfo().assessmentPolicy().makeupExam());
-        assertTrue(parsed.courseInfo().assessmentStandards().stream().anyMatch(line -> line.contains("平时作业评价标准表")));
+        assertTrue(parsed.courseInfo().assessmentStandards().stream()
+            .anyMatch(standard -> "平时作业".equals(standard.assessmentMethod())
+                && "课程目标1".equals(standard.objective())
+                && standard.excellent().contains("基本概念正确")
+                && "50".equals(standard.scorePercent())));
     }
 
     private byte[] buildRepresentativeSyllabus() throws Exception {
@@ -134,9 +138,8 @@ class OutlineParseEngineTest {
             paragraph(doc, "（三）考核与评价标准");
             paragraph(doc, "表6 平时作业评价标准表");
             table(doc, new String[][] {
-                {"平时作业", "课程目标", "评价标准", "成绩比例（%）"},
-                {"优秀（0.9~1）", "良好（0.8~0.89）", "中等（0.7~0.79）", "合格（0.6~0.69）"},
-                {"课程目标1", "按时交作业；基本概念正确。", "50", ""}
+                {"考核方式", "课程目标", "优秀（0.9~1）", "良好（0.8~0.89）", "中等（0.7~0.79）", "合格（0.6~0.69）", "不合格（0~0.59）", "成绩比例（%）"},
+                {"平时作业", "课程目标1", "按时交作业；基本概念正确。", "按时交作业；基本概念较正确。", "按时交作业；基本概念有错误。", "按时交作业；基本概念不清楚。", "不按时交作业或基本概念不正确。", "50"}
             });
 
             doc.write(out);

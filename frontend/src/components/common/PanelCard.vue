@@ -1,6 +1,6 @@
 <template>
   <section class="panel-card">
-    <header v-if="title || $slots.actions" class="panel-head">
+    <header v-if="title || $slots.actions" class="panel-head" :class="{ 'panel-head-compact': !subtitle }">
       <div>
         <h3 v-if="title">{{ title }}</h3>
         <p v-if="subtitle">{{ subtitle }}</p>
@@ -45,6 +45,11 @@ defineProps({
   padding: 16px 18px;
   border-bottom: 1px solid var(--color-border);
   background: var(--bg-panel-soft);
+}
+
+.panel-head-compact {
+  align-items: center;
+  padding-block: 14px;
 }
 
 .panel-head h3 {

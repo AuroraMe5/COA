@@ -136,6 +136,84 @@
       </PanelCard>
     </div>
 
+    <PanelCard v-if="hasSmartAnalysis" title="智能分析">
+      <div class="analysis-layout">
+        <div class="analysis-main">
+          <div class="analysis-heading">
+            <span class="risk-badge" :class="record.smartAnalysis.riskLevel">{{ riskLabel }}</span>
+            <strong>{{ analysisTitle }}</strong>
+          </div>
+          <p class="analysis-summary-text">{{ record.smartAnalysis.summary }}</p>
+
+          <div class="analysis-columns">
+            <div>
+              <h3>关键发现</h3>
+              <ul class="analysis-list">
+                <li v-for="item in record.smartAnalysis.highlights" :key="item">{{ item }}</li>
+              </ul>
+            </div>
+            <div>
+              <h3>改进动作</h3>
+              <ul class="analysis-list">
+                <li v-for="item in record.smartAnalysis.actions" :key="item">{{ item }}</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="weak-panel">
+          <div>
+            <h3>薄弱目标</h3>
+            <div v-if="record.smartAnalysis.weakObjectives?.length" class="weak-list">
+              <div v-for="item in record.smartAnalysis.weakObjectives" :key="item.objectiveId" class="weak-row">
+                <div>
+                  <strong>{{ item.objCode }}</strong>
+                  <small>{{ item.objContent }}</small>
+                </div>
+                <span>{{ Number(item.achieveValue || 0).toFixed(3) }}</span>
+              </div>
+            </div>
+            <div v-else class="empty-inline">暂无低于阈值的课程目标</div>
+          </div>
+
+          <div>
+            <h3>薄弱考核项</h3>
+            <div v-if="record.smartAnalysis.weakAssessItems?.length" class="weak-list">
+              <div v-for="item in record.smartAnalysis.weakAssessItems" :key="item.assessItemId" class="weak-row">
+                <div>
+                  <strong>{{ item.itemName }}</strong>
+                  <small>{{ item.itemTypeName }} · 已确认 {{ item.confirmedRows }} 条</small>
+                </div>
+                <span>{{ Number(item.avgRate || 0).toFixed(3) }}</span>
+              </div>
+            </div>
+            <div v-else class="empty-inline">暂无明显低分考核项</div>
+          </div>
+        </div>
+      </div>
+    </PanelCard>
+
+    <PanelCard v-if="hasChartData" title="图表看板">
+      <div class="chart-grid">
+        <div class="chart-block">
+          <div class="chart-title">课程目标达成度</div>
+          <ChartPanel :option="objectiveChartOption" height="300px" />
+        </div>
+        <div class="chart-block">
+          <div class="chart-title">考核项平均得分率</div>
+          <ChartPanel :option="assessRateChartOption" height="300px" />
+        </div>
+        <div class="chart-block">
+          <div class="chart-title">考核维度贡献</div>
+          <ChartPanel :option="componentChartOption" height="280px" />
+        </div>
+        <div class="chart-block">
+          <div class="chart-title">成绩确认情况</div>
+          <ChartPanel :option="coverageChartOption" height="280px" />
+        </div>
+      </div>
+    </PanelCard>
+
     <PanelCard title="成绩数据覆盖情况" subtitle="按考核项检查已确认成绩数量和平均得分率，核算只使用已确认成绩。">
       <div class="table-shell">
         <table class="data-table">
@@ -229,6 +307,14 @@
           />
         </div>
 
+        <div v-if="reportMeta?.smartAnalysis" class="report-analysis">
+          <strong>报告智能摘要</strong>
+          <p>{{ reportMeta.smartAnalysis.summary }}</p>
+          <div class="report-actions">
+            <span v-for="item in reportMeta.smartAnalysis.improvements" :key="item">{{ item }}</span>
+          </div>
+        </div>
+
         <p class="export-desc">
           报告将包含：课程概况、课程目标对毕业要求的支撑、成绩评定方法、成绩统计与试题分析、课程目标达成度计算与分析、总结与改进，以及全体学生明细附录。
         </p>
@@ -253,6 +339,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { downloadReport, getAchievementCalculation, getReportPreviewMeta, runAchievementCalculation } from '@/api'
+import ChartPanel from '@/components/common/ChartPanel.vue'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatCard from '@/components/common/StatCard.vue'
@@ -282,15 +369,9 @@ const record = reactive({
   generatedAt: '',
   overallAchievement: 0,
   results: [],
-  dataSummary: {
-    objectiveCount: 0,
-    assessItemCount: 0,
-    mappingCount: 0,
-    confirmedGradeRows: 0,
-    pendingGradeRows: 0,
-    assessItems: [],
-    warnings: []
-  }
+  dataSummary: defaultDataSummary(),
+  smartAnalysis: defaultSmartAnalysis(),
+  chartData: defaultChartData()
 })
 
 const running = ref(false)
@@ -305,6 +386,183 @@ const message = reactive({
 
 const hasCalcResult = computed(() => Boolean(record.generatedAt || record.results?.length))
 
+const hasSmartAnalysis = computed(() => Boolean(record.smartAnalysis?.summary))
+
+const hasChartData = computed(() => {
+  return Boolean(
+    record.results?.length ||
+    record.dataSummary?.assessItems?.length ||
+    Number(record.dataSummary?.confirmedGradeRows || 0) + Number(record.dataSummary?.pendingGradeRows || 0) > 0
+  )
+})
+
+const riskLabel = computed(() => {
+  const labels = {
+    success: '良好',
+    warning: '关注',
+    danger: '预警',
+    info: '待核算'
+  }
+  return labels[record.smartAnalysis?.riskLevel] || '分析'
+})
+
+const analysisTitle = computed(() => {
+  if (record.smartAnalysis?.riskLevel === 'success') {
+    return '整体达成情况稳定'
+  }
+  if (record.smartAnalysis?.riskLevel === 'danger') {
+    return '存在低于阈值的达成风险'
+  }
+  if (record.smartAnalysis?.riskLevel === 'warning') {
+    return '需要关注数据或薄弱环节'
+  }
+  return '等待形成完整核算结果'
+})
+
+const objectiveChartOption = computed(() => {
+  const data = (record.chartData?.objectiveBars?.length ? record.chartData.objectiveBars : record.results).map((item) => ({
+    name: item.name || item.objCode,
+    value: rateToPercent(item.value ?? item.achieveValue),
+    achieved: item.achieved ?? item.isAchieved
+  }))
+  return {
+    color: ['#2f855a'],
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value) => `${Number(value || 0).toFixed(1)}%`
+    },
+    grid: { left: 42, right: 24, top: 28, bottom: 42 },
+    xAxis: {
+      type: 'category',
+      data: data.map((item) => item.name),
+      axisTick: { alignWithLabel: true }
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: '{value}%' }
+    },
+    series: [{
+      name: '达成度',
+      type: 'bar',
+      barMaxWidth: 34,
+      data: data.map((item) => ({
+        value: item.value,
+        itemStyle: { color: item.achieved ? '#2f855a' : '#c2410c' }
+      })),
+      markLine: {
+        symbol: 'none',
+        lineStyle: { color: '#b7791f', type: 'dashed' },
+        label: { formatter: '阈值' },
+        data: [{ yAxis: rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.7) }]
+      }
+    }]
+  }
+})
+
+const assessRateChartOption = computed(() => {
+  const data = (record.chartData?.assessRates?.length ? record.chartData.assessRates : record.dataSummary.assessItems)
+    .map((item) => ({
+      name: item.name || item.itemName,
+      typeName: item.typeName || item.itemTypeName,
+      value: rateToPercent(item.value ?? item.avgRate)
+    }))
+    .sort((left, right) => left.value - right.value)
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value) => `${Number(value || 0).toFixed(1)}%`
+    },
+    grid: { left: 96, right: 24, top: 24, bottom: 32 },
+    xAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: '{value}%' }
+    },
+    yAxis: {
+      type: 'category',
+      data: data.map((item) => `${item.name}`),
+      axisLabel: {
+        width: 82,
+        overflow: 'truncate'
+      }
+    },
+    series: [{
+      name: '平均得分率',
+      type: 'bar',
+      barMaxWidth: 22,
+      data: data.map((item) => ({
+        value: item.value,
+        itemStyle: { color: item.value >= 70 ? '#2b6cb0' : '#c2410c' }
+      }))
+    }]
+  }
+})
+
+const componentChartOption = computed(() => {
+  const data = record.chartData?.componentBars?.length
+    ? record.chartData.componentBars
+    : [
+        { name: '平时', value: averageMetric('normal') },
+        { name: '期中', value: averageMetric('mid') },
+        { name: '期末', value: averageMetric('final') }
+      ]
+  return {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value) => `${Number(value || 0).toFixed(1)}%`
+    },
+    grid: { left: 42, right: 24, top: 28, bottom: 36 },
+    xAxis: {
+      type: 'category',
+      data: data.map((item) => item.name)
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: '{value}%' }
+    },
+    series: [{
+      name: '贡献值',
+      type: 'bar',
+      barMaxWidth: 42,
+      itemStyle: { color: '#0f766e' },
+      data: data.map((item) => rateToPercent(item.value))
+    }]
+  }
+})
+
+const coverageChartOption = computed(() => {
+  const coverage = record.chartData?.gradeCoverage?.length
+    ? record.chartData.gradeCoverage
+    : [
+        { name: '已确认成绩', value: Number(record.dataSummary.confirmedGradeRows || 0) },
+        { name: '待确认成绩', value: Number(record.dataSummary.pendingGradeRows || 0) }
+      ]
+  return {
+    color: ['#2f855a', '#d97706'],
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, left: 'center' },
+    series: [{
+      name: '成绩记录',
+      type: 'pie',
+      radius: ['48%', '72%'],
+      center: ['50%', '44%'],
+      avoidLabelOverlap: true,
+      label: {
+        formatter: '{b}\n{c} 条'
+      },
+      data: coverage.map((item) => ({
+        name: item.name,
+        value: Number(item.value || 0)
+      }))
+    }]
+  }
+})
+
 watch(() => record.config.calcMethod, (method) => {
   if (method === 'custom') {
     objectives.value.forEach((obj) => {
@@ -316,12 +574,60 @@ watch(() => record.config.calcMethod, (method) => {
   }
 })
 
+function defaultDataSummary() {
+  return {
+    objectiveCount: 0,
+    assessItemCount: 0,
+    mappingCount: 0,
+    confirmedGradeRows: 0,
+    pendingGradeRows: 0,
+    assessItems: [],
+    warnings: []
+  }
+}
+
+function defaultSmartAnalysis() {
+  return {
+    summary: '',
+    riskLevel: 'info',
+    thresholdValue: 0.7,
+    achievedCount: 0,
+    objectiveCount: 0,
+    highlights: [],
+    weakObjectives: [],
+    weakAssessItems: [],
+    actions: []
+  }
+}
+
+function defaultChartData() {
+  return {
+    objectiveBars: [],
+    componentBars: [],
+    assessRates: [],
+    gradeCoverage: []
+  }
+}
+
+function rateToPercent(value) {
+  return Number((Number(value || 0) * 100).toFixed(1))
+}
+
+function averageMetric(key) {
+  const rows = record.results || []
+  if (!rows.length) {
+    return 0
+  }
+  const total = rows.reduce((sum, item) => sum + Number(item[key] || 0), 0)
+  return total / rows.length
+}
+
 function setMessage(type, text) {
   message.type = type
   message.text = text
 }
 
-function applyRecord(payload) {
+function applyRecord(payload = {}) {
   if (payload.config) {
     record.config.calcRuleId = payload.config.calcRuleId || null
     record.config.calcMethod = payload.config.calcMethod || 'weighted_avg'
@@ -330,10 +636,12 @@ function applyRecord(payload) {
     record.config.retakeEnabled = Boolean(payload.config.retakeEnabled)
     record.config.customThresholds = payload.config.customThresholds || {}
   }
-  record.generatedAt = payload.generatedAt
-  record.overallAchievement = payload.overallAchievement
-  record.results = payload.results
-  record.dataSummary = payload.dataSummary || record.dataSummary
+  record.generatedAt = payload.generatedAt || ''
+  record.overallAchievement = payload.overallAchievement || 0
+  record.results = payload.results || []
+  record.dataSummary = { ...defaultDataSummary(), ...(payload.dataSummary || {}) }
+  record.smartAnalysis = { ...defaultSmartAnalysis(), ...(payload.smartAnalysis || {}) }
+  record.chartData = { ...defaultChartData(), ...(payload.chartData || {}) }
 }
 
 function formatPercent(value) {
@@ -495,6 +803,148 @@ onMounted(loadPage)
   line-height: 1.6;
 }
 
+.analysis-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.analysis-main,
+.weak-panel,
+.chart-block,
+.report-analysis {
+  border: 1px solid #e3edf2;
+  border-radius: 8px;
+  background: #fbfdfe;
+}
+
+.analysis-main {
+  padding: 18px;
+}
+
+.analysis-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text);
+}
+
+.risk-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.risk-badge.success {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.risk-badge.warning,
+.risk-badge.info {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.risk-badge.danger {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.analysis-summary-text {
+  margin: 14px 0 0;
+  color: var(--color-text);
+  line-height: 1.8;
+}
+
+.analysis-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.analysis-columns h3,
+.weak-panel h3,
+.chart-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  color: var(--color-text);
+}
+
+.analysis-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-soft);
+  line-height: 1.7;
+}
+
+.weak-panel {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.weak-list {
+  display: grid;
+  gap: 10px;
+}
+
+.weak-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid #e8f0f4;
+}
+
+.weak-row:last-child {
+  border-bottom: 0;
+}
+
+.weak-row strong,
+.weak-row small {
+  display: block;
+}
+
+.weak-row small {
+  margin-top: 4px;
+  color: var(--color-text-soft);
+  line-height: 1.5;
+}
+
+.weak-row span {
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.empty-inline {
+  padding: 12px;
+  border: 1px dashed #d8e6ec;
+  border-radius: 8px;
+  color: var(--color-text-soft);
+  background: #fff;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.chart-block {
+  padding: 14px;
+  overflow: hidden;
+}
+
 .export-section {
   display: grid;
   gap: 16px;
@@ -512,6 +962,31 @@ onMounted(loadPage)
   line-height: 1.8;
 }
 
+.report-analysis {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.report-analysis p {
+  margin: 0;
+  color: var(--color-text-soft);
+  line-height: 1.8;
+}
+
+.report-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.report-actions span {
+  padding: 8px 10px;
+  border-left: 3px solid var(--color-primary);
+  background: #fff;
+  color: var(--color-text);
+  line-height: 1.6;
+}
+
 .export-actions {
   display: flex;
   flex-wrap: wrap;
@@ -520,5 +995,13 @@ onMounted(loadPage)
 
 .mt-8 {
   margin-top: 8px;
+}
+
+@media (max-width: 980px) {
+  .analysis-layout,
+  .analysis-columns,
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

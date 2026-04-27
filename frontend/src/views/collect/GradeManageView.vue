@@ -26,6 +26,15 @@
           </select>
         </div>
         <div class="form-field">
+          <label>班级</label>
+          <select v-model="filter.classId" class="select-input">
+            <option value="">全部班级</option>
+            <option v-for="item in catalogs.classes" :key="item.id" :value="String(item.id)">
+              {{ item.className }}
+            </option>
+          </select>
+        </div>
+        <div class="form-field">
           <label>考核项</label>
           <select v-model="filter.assessItemId" class="select-input">
             <option value="">全部考核项</option>
@@ -146,8 +155,8 @@ import {
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 
-const catalogs = reactive({ courses: [], semesters: [], assessItems: [] })
-const filter = reactive({ courseId: '', semester: '', assessItemId: '', keyword: '' })
+const catalogs = reactive({ courses: [], semesters: [], assessItems: [], classes: [] })
+const filter = reactive({ courseId: '', semester: '', classId: '', assessItemId: '', keyword: '' })
 const columns = ref([])
 const rows = ref([])
 const total = ref(0)
@@ -191,6 +200,13 @@ watch(
   }
 )
 
+watch(
+  () => filter.classId,
+  () => {
+    if (filter.courseId && filter.semester) loadGrades()
+  }
+)
+
 // 关键字变化：防抖 350ms 后刷新
 let keywordTimer = null
 watch(
@@ -216,6 +232,7 @@ async function loadGrades() {
     const data = await getImportedGrades({
       courseId: filter.courseId,
       semester: filter.semester,
+      classId: filter.classId || undefined,
       assessItemId: filter.assessItemId || undefined,
       keyword: filter.keyword || undefined
     })
@@ -236,6 +253,7 @@ async function loadGrades() {
 function resetFilter() {
   filter.courseId = ''
   filter.semester = ''
+  filter.classId = ''
   filter.assessItemId = ''
   filter.keyword = ''
   clearTimeout(keywordTimer)
@@ -293,6 +311,7 @@ async function saveDraftRow() {
     await saveImportedGradeRow({
       courseId: filter.courseId,
       semester: filter.semester,
+      classId: filter.classId,
       studentNo: draftRow.value.studentNo,
       studentName: draftRow.value.studentName,
       cells: draftRow.value.cells
@@ -335,6 +354,7 @@ async function loadCatalogs() {
   catalogs.courses = data.courses || []
   catalogs.semesters = data.semesters || []
   catalogs.assessItems = data.assessItems || []
+  catalogs.classes = data.classes || []
 }
 
 onMounted(loadCatalogs)

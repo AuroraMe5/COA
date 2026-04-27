@@ -100,6 +100,13 @@
       title="课程信息确认"
       subtitle="系统已从文件中提取到以下课程基本信息，请选择处理方式并确认字段值后再写入正式数据。"
     >
+      <template #actions>
+        <label class="review-check-pill">
+          <input v-model="sectionConfirm.courseInfo" type="checkbox" />
+          确认
+        </label>
+      </template>
+
       <div class="form-field mt-0">
         <label>处理方式</label>
         <div class="radio-group">
@@ -178,11 +185,6 @@
           新建课程时，课程代码为必填项。如提取值为空，请在上方手工填写后再写入。
         </div>
       </template>
-
-      <label v-if="courseImportMode === 'overwrite'" class="mt-16 overwrite-option">
-        <input v-model="overwriteExisting" type="checkbox" />
-        覆盖所选课程本学期已有目标和考核项
-      </label>
     </PanelCard>
 
     <PanelCard
@@ -190,16 +192,20 @@
       title="大纲扩展提取内容"
       subtitle="教学内容、成绩政策、考核要求和评价标准均可修改；确认写入前会一并保存。"
     >
-      <template #actions>
-        <button class="btn btn-light btn-mini" @click="addTeachingContent">新增教学内容</button>
-        <button class="btn btn-light btn-mini" @click="addAssessmentDetail">新增考核要求</button>
-        <button class="btn btn-primary btn-mini" @click="saveParsedCourseInfo()">保存扩展内容</button>
-      </template>
-
       <div class="editable-section">
         <div class="section-head">
           <h3 class="section-subtitle">教学内容与学时安排</h3>
-          <button class="btn btn-light btn-mini" @click="addTeachingContent">新增</button>
+          <div class="section-actions">
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.teachingContents" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.teachingContents" type="checkbox" />
+              覆盖
+            </label>
+            <button class="btn btn-light btn-mini" @click="addTeachingContent">新增</button>
+          </div>
         </div>
         <div v-if="parsedTeachingContents.length" class="table-shell">
           <table class="data-table compact-table editable-table">
@@ -231,7 +237,19 @@
       </div>
 
       <div class="editable-section mt-16">
-        <h3 class="section-subtitle">成绩记载与考核政策</h3>
+        <div class="section-head">
+          <h3 class="section-subtitle">成绩记载与考核政策</h3>
+          <div class="section-actions">
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.assessmentPolicy" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.assessmentPolicy" type="checkbox" />
+              覆盖
+            </label>
+          </div>
+        </div>
         <div class="policy-grid editable-policy-grid">
           <div>
             <span>成绩记载方式</span>
@@ -255,7 +273,17 @@
       <div class="editable-section mt-16">
         <div class="section-head">
           <h3 class="section-subtitle">考核要求与成绩评定</h3>
-          <button class="btn btn-light btn-mini" @click="addAssessmentDetail">新增</button>
+          <div class="section-actions">
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.assessmentDetails" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.assessmentDetails" type="checkbox" />
+              覆盖
+            </label>
+            <button class="btn btn-light btn-mini" @click="addAssessmentDetail">新增</button>
+          </div>
         </div>
         <div v-if="parsedAssessmentDetails.length" class="table-shell">
           <table class="data-table compact-table editable-table">
@@ -286,14 +314,71 @@
 
       <div class="editable-section mt-16">
         <div class="section-head">
-          <h3 class="section-subtitle">考核与评价标准片段</h3>
-          <button class="btn btn-light btn-mini" @click="addAssessmentStandard">新增</button>
-        </div>
-        <div v-if="parsedAssessmentStandards.length" class="standard-list">
-          <div v-for="(item, index) in parsedAssessmentStandards" :key="index" class="standard-editor">
-            <textarea v-model.trim="parsedAssessmentStandards[index]" class="text-area" />
-            <button class="btn btn-danger btn-mini" @click="removeAssessmentStandard(index)">删除</button>
+          <h3 class="section-subtitle">考核与评价标准</h3>
+          <div class="section-actions">
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.assessmentStandards" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.assessmentStandards" type="checkbox" />
+              覆盖
+            </label>
+            <button class="btn btn-light btn-mini" @click="addAssessmentStandard">新增</button>
           </div>
+        </div>
+        <div v-if="parsedAssessmentStandards.length" class="table-shell">
+          <table class="data-table compact-table standard-table">
+            <thead>
+              <tr>
+                <th>考核方式</th>
+                <th>课程目标</th>
+                <th>考核与评价标准</th>
+                <th>成绩比例</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item, index) in parsedAssessmentStandards" :key="index">
+                <td>
+                  <input v-model.trim="item.assessmentMethod" class="text-input compact-input method-input" />
+                </td>
+                <td>
+                  <input v-model.trim="item.objective" class="text-input compact-input objective-input" />
+                </td>
+                <td>
+                  <div class="standard-matrix">
+                    <label>
+                      <span>优秀（0.9~1）</span>
+                      <textarea v-model.trim="item.excellent" class="text-area standard-area" />
+                    </label>
+                    <label>
+                      <span>良好（0.8~0.89）</span>
+                      <textarea v-model.trim="item.good" class="text-area standard-area" />
+                    </label>
+                    <label>
+                      <span>中等（0.7~0.79）</span>
+                      <textarea v-model.trim="item.medium" class="text-area standard-area" />
+                    </label>
+                    <label>
+                      <span>合格（0.6~0.69）</span>
+                      <textarea v-model.trim="item.pass" class="text-area standard-area" />
+                    </label>
+                    <label>
+                      <span>不合格（0~0.59）</span>
+                      <textarea v-model.trim="item.fail" class="text-area standard-area" />
+                    </label>
+                  </div>
+                </td>
+                <td>
+                  <input v-model.trim="item.scorePercent" class="text-input compact-input score-percent-input" />
+                </td>
+                <td>
+                  <button class="btn btn-danger btn-mini" @click="removeAssessmentStandard(index)">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         <div v-else class="notice warning">暂无评价标准片段，可点击新增补充。</div>
       </div>
@@ -314,6 +399,14 @@
           <div class="actions-inline">
             <button class="btn btn-light" @click="addObjectiveDraft">新增目标草稿</button>
             <div class="muted">已确认目标权重合计：{{ confirmedObjectiveWeight.toFixed(2) }}</div>
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.objectives" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.objectives" type="checkbox" />
+              覆盖
+            </label>
           </div>
 
           <div class="detail-list mt-16">
@@ -385,10 +478,6 @@
                 <textarea v-model.trim="item.gradReqDescFinal" class="text-area" @blur="saveObjectiveDraft(item)" />
               </div>
 
-              <div class="source-tip mt-12">
-                <strong>原文：</strong>{{ item.originalText || '教师手工补充' }}
-              </div>
-
               <div class="actions-inline mt-12">
                 <button class="btn btn-light" @click="setObjectiveStatus(item, 0)">待定</button>
                 <button class="btn btn-success" @click="setObjectiveStatus(item, 1)">确认</button>
@@ -402,6 +491,14 @@
           <div class="actions-inline">
             <button class="btn btn-light" @click="addAssessDraft">新增考核项</button>
             <div class="muted">已确认考核项权重合计：{{ confirmedAssessWeight.toFixed(2) }}</div>
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.assessItems" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.assessItems" type="checkbox" />
+              覆盖
+            </label>
           </div>
 
           <div class="table-shell mt-16">
@@ -466,6 +563,17 @@
           title="目标考核映射草稿复核"
           subtitle="同一条目标的各考核方式占比排列在同一行，支持手工修改后保存。写入时将同步生成映射矩阵。"
         >
+          <template #actions>
+            <label class="review-check-pill">
+              <input v-model="sectionConfirm.mapping" type="checkbox" />
+              确认
+            </label>
+            <label v-if="courseImportMode === 'overwrite'" class="review-check-pill review-overwrite-pill">
+              <input v-model="sectionOverwrite.mapping" type="checkbox" />
+              覆盖
+            </label>
+          </template>
+
           <template v-if="task.mappingMatrix?.rows?.length">
             <div class="table-shell">
               <table class="data-table mapping-table">
@@ -513,10 +621,17 @@
         </PanelCard>
 
         <PanelCard title="确认写入" subtitle="全部复核完成后，可将已确认的目标和考核项一键写入正式数据表。">
-          <div class="info-strip">
-            <div>已确认目标：{{ confirmedObjectiveCount }} 条</div>
-            <div>已确认考核项：{{ confirmedAssessCount }} 条</div>
-            <div>待写入映射：{{ task.mappingMatrix?.rows?.length || 0 }} 条目标</div>
+          <div class="review-summary-grid">
+            <div
+              v-for="section in requiredReviewSections"
+              :key="section.key"
+              class="review-summary-card"
+              :class="{ confirmed: section.confirmed }"
+            >
+              <span>{{ section.label }}</span>
+              <strong>{{ section.confirmed ? '已确认' : '待确认' }}</strong>
+              <small>{{ section.summary }}</small>
+            </div>
           </div>
 
           <div class="actions-inline mt-16">
@@ -564,11 +679,29 @@ const task = ref(null)
 const uploading = ref(false)
 const selectedFile = ref(null)
 const selectedFileName = ref('')
-const overwriteExisting = ref(false)
 const courseImportMode = ref('overwrite')
 const overwriteTargetCourseId = ref('')
 const overwriteFields = reactive(new Set())
 const parsedCourseEdits = reactive({})
+const sectionConfirm = reactive({
+  courseInfo: false,
+  teachingContents: false,
+  assessmentPolicy: false,
+  assessmentDetails: false,
+  assessmentStandards: false,
+  objectives: false,
+  assessItems: false,
+  mapping: false
+})
+const sectionOverwrite = reactive({
+  teachingContents: false,
+  assessmentPolicy: false,
+  assessmentDetails: false,
+  assessmentStandards: false,
+  objectives: false,
+  assessItems: false,
+  mapping: false
+})
 const message = reactive({
   type: 'success',
   text: ''
@@ -612,24 +745,85 @@ const selectedTargetCourse = computed(() =>
 )
 
 const confirmedObjectiveWeight = computed(() =>
-  (task.value?.objectives || [])
-    .filter((item) => Number(item.isConfirmed) === 1)
+  effectiveDraftItems(task.value?.objectives || [], 'objectives')
     .reduce((sum, item) => sum + Number(item.weightFinal || 0), 0)
 )
 
 const confirmedAssessWeight = computed(() =>
-  (task.value?.assessItems || [])
-    .filter((item) => Number(item.isConfirmed) === 1)
+  effectiveDraftItems(task.value?.assessItems || [], 'assessItems')
     .reduce((sum, item) => sum + Number(item.weightFinal || 0), 0)
 )
 
 const confirmedObjectiveCount = computed(() =>
-  (task.value?.objectives || []).filter((item) => Number(item.isConfirmed) === 1).length
+  effectiveDraftItems(task.value?.objectives || [], 'objectives').length
 )
 
 const confirmedAssessCount = computed(() =>
-  (task.value?.assessItems || []).filter((item) => Number(item.isConfirmed) === 1).length
+  effectiveDraftItems(task.value?.assessItems || [], 'assessItems').length
 )
+
+const hasAssessmentPolicy = computed(() =>
+  Object.values(parsedAssessmentPolicy.value || {}).some((value) => String(value || '').trim())
+)
+
+const requiredReviewSections = computed(() => [
+  {
+    key: 'courseInfo',
+    label: '课程信息',
+    summary: '基础字段',
+    confirmed: sectionConfirm.courseInfo,
+    visible: true
+  },
+  {
+    key: 'teachingContents',
+    label: '教学内容',
+    summary: `${parsedTeachingContents.value.length} 条`,
+    confirmed: sectionConfirm.teachingContents,
+    visible: parsedTeachingContents.value.length > 0
+  },
+  {
+    key: 'assessmentPolicy',
+    label: '考核政策',
+    summary: '成绩记载与组成',
+    confirmed: sectionConfirm.assessmentPolicy,
+    visible: hasAssessmentPolicy.value
+  },
+  {
+    key: 'assessmentDetails',
+    label: '考核要求',
+    summary: `${parsedAssessmentDetails.value.length} 条`,
+    confirmed: sectionConfirm.assessmentDetails,
+    visible: parsedAssessmentDetails.value.length > 0
+  },
+  {
+    key: 'assessmentStandards',
+    label: '评价标准',
+    summary: `${parsedAssessmentStandards.value.length} 条`,
+    confirmed: sectionConfirm.assessmentStandards,
+    visible: parsedAssessmentStandards.value.length > 0
+  },
+  {
+    key: 'objectives',
+    label: '课程目标',
+    summary: `已确认 ${confirmedObjectiveCount.value} 条`,
+    confirmed: sectionConfirm.objectives,
+    visible: (task.value?.objectives || []).length > 0
+  },
+  {
+    key: 'assessItems',
+    label: '考核项',
+    summary: `已确认 ${confirmedAssessCount.value} 条`,
+    confirmed: sectionConfirm.assessItems,
+    visible: (task.value?.assessItems || []).length > 0
+  },
+  {
+    key: 'mapping',
+    label: '目标映射',
+    summary: `${task.value?.mappingMatrix?.rows?.length || 0} 条目标`,
+    confirmed: sectionConfirm.mapping,
+    visible: (task.value?.mappingMatrix?.rows?.length || 0) > 0
+  }
+].filter((section) => section.visible))
 
 function assessWeightForMethod(methodName, methodType) {
   const assessItems = task.value?.assessItems || []
@@ -637,6 +831,13 @@ function assessWeightForMethod(methodName, methodType) {
     (a) => (methodType && a.itemTypeFinal === methodType) || a.itemNameFinal === methodName
   )
   return item ? Number(item.weightFinal || 0) : 0
+}
+
+function effectiveDraftItems(items, sectionKey) {
+  if (sectionConfirm[sectionKey]) {
+    return items.filter((item) => Number(item.isConfirmed) !== 2)
+  }
+  return items.filter((item) => Number(item.isConfirmed) === 1)
 }
 
 function objectiveWeightForMappingRow(row) {
@@ -780,6 +981,9 @@ function ensureParsedCourseShape() {
   if (!Array.isArray(course.assessmentStandards)) {
     course.assessmentStandards = []
   }
+  if (course.assessmentStandards.some(shouldNormalizeAssessmentStandard)) {
+    course.assessmentStandards = course.assessmentStandards.map(normalizeAssessmentStandard)
+  }
   if (!course.assessmentPolicy || typeof course.assessmentPolicy !== 'object' || Array.isArray(course.assessmentPolicy)) {
     course.assessmentPolicy = {}
   }
@@ -834,8 +1038,59 @@ function removeAssessmentDetail(index) {
   parsedAssessmentDetails.value.splice(index, 1)
 }
 
+function emptyAssessmentStandard() {
+  return {
+    assessmentMethod: '',
+    objective: '',
+    excellent: '',
+    good: '',
+    medium: '',
+    pass: '',
+    fail: '',
+    scorePercent: '',
+    originalText: ''
+  }
+}
+
+function shouldNormalizeAssessmentStandard(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return true
+  }
+  return ![
+    'assessmentMethod',
+    'objective',
+    'excellent',
+    'good',
+    'medium',
+    'pass',
+    'fail',
+    'scorePercent',
+    'originalText'
+  ].every((key) => Object.prototype.hasOwnProperty.call(item, key))
+}
+
+function normalizeAssessmentStandard(item) {
+  if (item && typeof item === 'object' && !Array.isArray(item)) {
+    return {
+      ...emptyAssessmentStandard(),
+      ...item,
+      assessmentMethod: item.assessmentMethod || item.method || item.name || '',
+      objective: item.objective || item.courseObjective || item.target || '',
+      pass: item.pass || item.qualified || '',
+      fail: item.fail || item.unqualified || '',
+      scorePercent: item.scorePercent || item.scoreRatio || item.weight || ''
+    }
+  }
+  const text = String(item || '')
+  return {
+    ...emptyAssessmentStandard(),
+    excellent: text,
+    originalText: text
+  }
+}
+
 function addAssessmentStandard() {
-  parsedAssessmentStandards.value.push('')
+  parsedAssessmentStandards.value.push(emptyAssessmentStandard())
 }
 
 function removeAssessmentStandard(index) {
@@ -867,7 +1122,17 @@ function buildSubmittedCourseInfo() {
       evaluationMethod: item.evaluationMethod || '',
       supports: item.supports || ''
     })),
-    assessmentStandards: parsedAssessmentStandards.value.map((item) => String(item || '')),
+    assessmentStandards: parsedAssessmentStandards.value.map((item) => ({
+      assessmentMethod: item.assessmentMethod || '',
+      objective: item.objective || '',
+      excellent: item.excellent || '',
+      good: item.good || '',
+      medium: item.medium || '',
+      pass: item.pass || '',
+      fail: item.fail || '',
+      scorePercent: item.scorePercent || '',
+      originalText: item.originalText || ''
+    })),
     assessmentPolicy: {
       scoreRecordMode: parsedAssessmentPolicy.value.scoreRecordMode || '',
       finalGradeComposition: parsedAssessmentPolicy.value.finalGradeComposition || '',
@@ -910,6 +1175,15 @@ function toggleOverwriteField(key) {
 function formatCourseValue(value) {
   if (value === null || value === undefined || value === '') return ''
   return String(value)
+}
+
+function resetReviewState() {
+  Object.keys(sectionConfirm).forEach((key) => {
+    sectionConfirm[key] = false
+  })
+  Object.keys(sectionOverwrite).forEach((key) => {
+    sectionOverwrite[key] = false
+  })
 }
 
 function confidenceTone(level) {
@@ -1014,6 +1288,7 @@ async function handleUpload() {
       semester: form.semester
     })
 
+    resetReviewState()
     task.value = {
       taskId: created.taskId,
       status: created.status,
@@ -1241,6 +1516,17 @@ async function saveAllReviewDrafts() {
   const objectives = task.value?.objectives || []
   const assessItems = task.value?.assessItems || []
 
+  if (sectionConfirm.objectives) {
+    objectives.forEach((item) => {
+      if (Number(item.isConfirmed) !== 2) item.isConfirmed = 1
+    })
+  }
+  if (sectionConfirm.assessItems) {
+    assessItems.forEach((item) => {
+      if (Number(item.isConfirmed) !== 2) item.isConfirmed = 1
+    })
+  }
+
   for (const item of objectives) {
     await saveObjectiveDraft(item)
   }
@@ -1253,6 +1539,12 @@ async function saveAllReviewDrafts() {
 async function confirmTask() {
   if (!task.value) return
 
+  const unconfirmedSections = requiredReviewSections.value.filter((section) => !section.confirmed)
+  if (unconfirmedSections.length) {
+    setMessage('error', `请先完成整体确认：${unconfirmedSections.map((section) => section.label).join('、')}。`)
+    return
+  }
+
   if (confirmedObjectiveCount.value === 0) {
     setMessage('error', '至少需要确认 1 条课程目标才能写入。')
     return
@@ -1263,10 +1555,7 @@ async function confirmTask() {
     return
   }
 
-  if (
-    task.value.assessItems?.some((item) => Number(item.isConfirmed) === 1) &&
-    Math.abs(confirmedAssessWeight.value - 100) > 0.01
-  ) {
+  if (confirmedAssessCount.value > 0 && Math.abs(confirmedAssessWeight.value - 100) > 0.01) {
     setMessage('error', `已确认考核项权重合计为 ${confirmedAssessWeight.value.toFixed(2)}，必须等于 100。`)
     return
   }
@@ -1284,12 +1573,22 @@ async function confirmTask() {
   try {
     await saveAllReviewDrafts()
     const submittedCourseInfo = await saveParsedCourseInfo('', true)
+    const isOverwriteMode = courseImportMode.value === 'overwrite'
     const result = await confirmParseTask(task.value.taskId, {
       outlineId: task.value.outlineId,
-      overwrite: courseImportMode.value === 'overwrite' && overwriteExisting.value,
+      overwrite: false,
+      overwriteTeachingContents: isOverwriteMode && sectionOverwrite.teachingContents,
+      overwriteAssessmentPolicy: isOverwriteMode && sectionOverwrite.assessmentPolicy,
+      overwriteAssessmentDetails: isOverwriteMode && sectionOverwrite.assessmentDetails,
+      overwriteAssessmentStandards: isOverwriteMode && sectionOverwrite.assessmentStandards,
+      overwriteObjectives: isOverwriteMode && sectionOverwrite.objectives,
+      overwriteAssessItems: isOverwriteMode && sectionOverwrite.assessItems,
+      overwriteMappings: isOverwriteMode && sectionOverwrite.mapping,
       courseImportMode: courseImportMode.value,
-      targetCourseId: courseImportMode.value === 'overwrite' ? overwriteTargetCourseId.value : null,
-      overwriteCourseFields: courseImportMode.value === 'overwrite' ? [...overwriteFields] : [],
+      targetCourseId: isOverwriteMode ? overwriteTargetCourseId.value : null,
+      overwriteCourseFields: isOverwriteMode ? [...overwriteFields] : [],
+      reviewConfirmations: { ...sectionConfirm },
+      reviewOverwrite: { ...sectionOverwrite },
       courseInfo: submittedCourseInfo
     })
 
@@ -1446,12 +1745,6 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
-.source-tip {
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--color-text-soft);
-}
-
 .section-subtitle {
   margin: 0 0 10px;
   font-size: 15px;
@@ -1475,6 +1768,117 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.review-check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 12px 7px 10px;
+  border: 1px solid #d7e6ec;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.review-check-pill:hover {
+  border-color: #9fc1d1;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+}
+
+.review-check-pill input {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid #9eb4c1;
+  border-radius: 50%;
+  background: #fff;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.review-check-pill input::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.review-check-pill input:checked {
+  border-color: #0f766e;
+  background: #0f766e;
+  box-shadow: inset 0 0 0 3px #fff;
+}
+
+.review-check-pill:has(input:checked) {
+  border-color: rgba(15, 118, 110, 0.45);
+  background: #edfdf8;
+  color: #0f766e;
+}
+
+.review-overwrite-pill input:checked {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.review-overwrite-pill:has(input:checked) {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.review-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.review-summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #e3ebf0;
+  border-radius: var(--radius-md);
+  background: #fbfdfe;
+}
+
+.review-summary-card.confirmed {
+  border-color: rgba(56, 161, 105, 0.35);
+  background: #f6fff9;
+}
+
+.review-summary-card span {
+  color: var(--color-text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-summary-card strong {
+  color: var(--color-text);
+  font-size: 16px;
+}
+
+.review-summary-card small {
+  color: var(--color-text-muted, #718096);
+}
+
 .editable-table {
   min-width: 980px;
 }
@@ -1493,25 +1897,43 @@ onBeforeUnmount(() => {
   min-width: 76px;
 }
 
-.standard-list {
+.standard-table {
+  min-width: 1180px;
+}
+
+.method-input {
+  min-width: 120px;
+}
+
+.objective-input {
+  min-width: 110px;
+}
+
+.score-percent-input {
+  min-width: 86px;
+}
+
+.standard-matrix {
   display: grid;
+  grid-template-columns: repeat(5, minmax(170px, 1fr));
   gap: 8px;
 }
 
-.standard-editor {
+.standard-matrix label {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
+  gap: 6px;
 }
 
-.standard-line {
-  padding: 10px 12px;
-  border: 1px solid #e6eef2;
-  border-radius: 8px;
-  background: #fbfdfe;
+.standard-matrix span {
   color: var(--color-text-soft);
-  line-height: 1.6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.standard-area {
+  min-height: 150px;
+  line-height: 1.75;
+  resize: vertical;
 }
 
 .policy-grid {
@@ -1558,9 +1980,10 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .standard-editor {
+  .standard-matrix {
     grid-template-columns: 1fr;
   }
+
 }
 
 .radio-group {

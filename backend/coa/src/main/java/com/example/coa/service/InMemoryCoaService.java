@@ -193,6 +193,19 @@ public class InMemoryCoaService {
         return result;
     }
 
+    public Map<String, Object> updateCourseAssessItems(Long courseId, String semester, Map<String, Object> payload) {
+        long id = longValue(courseId);
+        String semesterCode = normalizeSemester(semester);
+        long outlineId = ensureOutline(id, semesterCode);
+        List<Map<String, Object>> assessItems = normalizeAssessItems(listOfMap(payload.get("assessItems")));
+        validateConfirmedWeightTotal(assessItems, "考核项", true);
+        replaceAssessItemsSafely(outlineId, assessItems);
+
+        Map<String, Object> result = getCourseDetail(id, semesterCode);
+        result.put("savedAssessItems", assessItems.size());
+        return result;
+    }
+
     public List<String> getSemesters() {
         return catalogSemesters();
     }
@@ -848,6 +861,11 @@ public class InMemoryCoaService {
 
         long parseTaskId = longValue(taskRow.get("id"));
         boolean overwrite = booleanValue(payload.get("overwrite"));
+        boolean overwriteObjectives = overwrite || booleanValue(payload.get("overwriteObjectives"));
+        boolean overwriteAssessItems = overwrite || booleanValue(payload.get("overwriteAssessItems"));
+        boolean overwriteMappings = overwrite || booleanValue(payload.get("overwriteMappings"));
+        boolean overwriteTeachingContents = overwrite || booleanValue(payload.get("overwriteTeachingContents"));
+        boolean anyOverwrite = overwrite || overwriteObjectives || overwriteAssessItems || overwriteMappings || overwriteTeachingContents;
         long semesterId = longValue(taskRow.get("semester_id"));
         long teacherId = longValue(taskRow.get("teacher_id"));
         String semesterCode = queryString("SELECT semester_code FROM base_semester WHERE id = :id", params("id", semesterId));
@@ -857,6 +875,16 @@ public class InMemoryCoaService {
         String courseImportMode = defaultString(payload.get("courseImportMode"), "current");
         Long targetCourseId = nullableLong(payload.get("targetCourseId"));
         List<String> overwriteCourseFields = listOfString(payload.get("overwriteCourseFields"));
+        anyOverwrite = anyOverwrite || !overwriteCourseFields.isEmpty();
+        Map<String, Object> reviewConfirmations = mapOfObject(payload.get("reviewConfirmations"));
+        Map<String, Object> reviewOverwrite = mapOfObject(payload.get("reviewOverwrite"));
+        mergeExplicitReviewOverwrite(reviewOverwrite, payload);
+        if (!reviewConfirmations.isEmpty()) {
+            mergedCourseInfo.put("reviewConfirmations", reviewConfirmations);
+        }
+        if (!reviewOverwrite.isEmpty()) {
+            mergedCourseInfo.put("reviewOverwrite", reviewOverwrite);
+        }
 
         long courseId;
         if ("new".equalsIgnoreCase(courseImportMode)) {
@@ -867,13 +895,23 @@ public class InMemoryCoaService {
         }
         ensureCourseTeacher(courseId, teacherId, semesterId);
         long outlineId = ensureOutline(courseId, semesterCode);
+        if ("overwrite".equalsIgnoreCase(courseImportMode)) {
+            Map<String, Object> existingCourseInfo = latestParsedCourseInfo(courseId, semesterCode);
+            List<Map<String, Object>> existingTeachingContents = courseTeachingContentList(courseId, semesterCode);
+            if (!existingTeachingContents.isEmpty()) {
+                existingCourseInfo.put("teachingContents", existingTeachingContents);
+            }
+            mergedCourseInfo = applyParsedSectionOverwritePolicy(mergedCourseInfo, existingCourseInfo, reviewOverwrite);
+        }
         List<Map<String, Object>> submittedTeachingContents = normalizeTeachingContents(listOfMap(mergedCourseInfo.get("teachingContents")));
 
+        boolean useAllObjectiveDrafts = booleanValue(reviewConfirmations.get("objectives"));
+        String objectiveConfirmFilter = useAllObjectiveDrafts ? "AND is_confirmed <> 2" : "AND is_confirmed = 1";
         List<Map<String, Object>> objectiveDrafts = jdbcTemplate.query("""
             SELECT *
             FROM parse_objective_draft
             WHERE parse_task_id = :parseTaskId
-              AND is_confirmed = 1
+            """ + objectiveConfirmFilter + """
             ORDER BY sort_order ASC, id ASC
             """, params("parseTaskId", parseTaskId), (rs, rowNum) -> map(
             "objCode", defaultString(rs.getString("obj_code_suggest"), "OBJ-" + (rowNum + 1)),
@@ -887,11 +925,13 @@ public class InMemoryCoaService {
 
         validateConfirmedWeightTotal(objectiveDrafts, "课程目标", true);
 
+        boolean useAllAssessDrafts = booleanValue(reviewConfirmations.get("assessItems"));
+        String assessConfirmFilter = useAllAssessDrafts ? "AND is_confirmed <> 2" : "AND is_confirmed = 1";
         List<Map<String, Object>> assessDrafts = jdbcTemplate.query("""
             SELECT *
             FROM parse_assess_item_draft
             WHERE parse_task_id = :parseTaskId
-              AND is_confirmed = 1
+            """ + assessConfirmFilter + """
             ORDER BY sort_order ASC, id ASC
             """, params("parseTaskId", parseTaskId), (rs, rowNum) -> map(
             "itemName", defaultString(rs.getString("item_name_final"), rs.getString("item_name_suggest")),
@@ -902,13 +942,22 @@ public class InMemoryCoaService {
         validateConfirmedWeightTotal(assessDrafts, "考核项", false);
 
         if (overwrite) {
-            clearOutlineImportData(outlineId);
+            clearObjectiveImportData(outlineId);
+        } else {
+            if (overwriteMappings || overwriteObjectives || overwriteAssessItems) {
+                clearObjectiveAssessMappings(outlineId);
+            }
+            if (overwriteObjectives) {
+                clearObjectiveImportData(outlineId);
+            }
         }
 
         int importedObjectiveCount = upsertObjectives(outlineId, objectiveDrafts);
 
         if (assessDrafts.isEmpty()) {
             ensureDefaultAssessItems(outlineId);
+        } else if (overwrite || overwriteAssessItems) {
+            replaceAssessItemsSafely(outlineId, assessDrafts);
         } else {
             upsertAssessItems(outlineId, assessDrafts);
         }
@@ -919,10 +968,23 @@ public class InMemoryCoaService {
         int importedMappingCount = applyParsedObjectiveAssessMappings(
             outlineId,
             objectiveDrafts,
-            mappingList
+            mappingList,
+            overwriteMappings || overwriteObjectives || overwriteAssessItems || overwrite
         );
+        int importedTeachingContentCount = 0;
         if (!submittedTeachingContents.isEmpty()) {
-            replaceCourseTeachingContents(courseId, semesterId, submittedTeachingContents);
+            boolean noExistingTeachingContent = count("""
+                SELECT COUNT(*)
+                FROM course_teaching_content
+                WHERE course_id = :courseId
+                  AND semester_id = :semesterId
+                """, new MapSqlParameterSource()
+                .addValue("courseId", courseId)
+                .addValue("semesterId", semesterId)) == 0;
+            if (overwriteTeachingContents || noExistingTeachingContent) {
+                replaceCourseTeachingContents(courseId, semesterId, submittedTeachingContents);
+                importedTeachingContentCount = submittedTeachingContents.size();
+            }
         }
         jdbcTemplate.update("""
             UPDATE parse_task
@@ -935,7 +997,7 @@ public class InMemoryCoaService {
             WHERE id = :id
             """, new MapSqlParameterSource()
             .addValue("id", parseTaskId)
-            .addValue("overwriteMode", overwrite ? 1 : 0)
+            .addValue("overwriteMode", anyOverwrite ? 1 : 0)
             .addValue("courseId", courseId)
             .addValue("outlineId", outlineId)
             .addValue("parsedCourseJson", writeJson(mergedCourseInfo)));
@@ -946,11 +1008,268 @@ public class InMemoryCoaService {
             "courseName", defaultString(mergedCourseInfo.get("courseNameZh"), defaultString(mergedCourseInfo.get("courseName"), "")),
             "importedObjectives", importedObjectiveCount,
             "importedAssessItems", assessDrafts.isEmpty() ? assessItemListByOutline(outlineId).size() : assessDrafts.size(),
-            "importedMappings", importedMappingCount
+            "importedMappings", importedMappingCount,
+            "importedTeachingContents", importedTeachingContentCount
         );
     }
 
-    public Map<String, Object> uploadGradeFile(Long courseId, Long assessItemId, String semester, MultipartFile file) {
+    public Map<String, Object> getClasses(String keyword) {
+        String text = defaultString(keyword, "");
+        StringBuilder sql = new StringBuilder("""
+            SELECT
+                bc.id,
+                bc.class_code,
+                bc.class_name,
+                bc.major_id,
+                bm.major_name,
+                bc.grade_year,
+                bc.student_count,
+                bc.status
+            FROM base_class bc
+            LEFT JOIN base_major bm ON bm.id = bc.major_id
+            WHERE bc.status = 1
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (StringUtils.hasText(text)) {
+            sql.append(" AND (bc.class_code LIKE :keyword OR bc.class_name LIKE :keyword OR bm.major_name LIKE :keyword)");
+            params.addValue("keyword", "%" + text.trim() + "%");
+        }
+        sql.append(" ORDER BY bc.grade_year DESC, bc.class_code ASC, bc.id ASC");
+        List<Map<String, Object>> rows = jdbcTemplate.query(sql.toString(), params, (rs, rowNum) -> classMap(rs));
+        return map("items", rows, "total", rows.size());
+    }
+
+    public Map<String, Object> saveClass(Long id, Map<String, Object> payload) {
+        String classCode = defaultString(payload.get("classCode"), "").trim();
+        String className = defaultString(payload.get("className"), "").trim();
+        Long majorId = nullableLong(payload.get("majorId"));
+        String gradeYear = defaultString(payload.get("gradeYear"), "").trim();
+        if (!StringUtils.hasText(classCode)) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "班级编码不能为空。");
+        }
+        if (!StringUtils.hasText(className)) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "班级名称不能为空。");
+        }
+        if (id == null) {
+            GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+            jdbcTemplate.update("""
+                INSERT INTO base_class (class_code, class_name, major_id, grade_year, student_count, status)
+                VALUES (:classCode, :className, :majorId, :gradeYear, 0, 1)
+                """, new MapSqlParameterSource()
+                .addValue("classCode", classCode)
+                .addValue("className", className)
+                .addValue("majorId", majorId)
+                .addValue("gradeYear", gradeYear), keyHolder);
+            id = keyHolder.getKey().longValue();
+        } else {
+            jdbcTemplate.update("""
+                UPDATE base_class
+                SET class_code = :classCode,
+                    class_name = :className,
+                    major_id = :majorId,
+                    grade_year = :gradeYear,
+                    updated_at = NOW()
+                WHERE id = :id
+                """, new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("classCode", classCode)
+                .addValue("className", className)
+                .addValue("majorId", majorId)
+                .addValue("gradeYear", gradeYear));
+        }
+        refreshClassStudentCount(id);
+        return map("success", true, "item", getClassById(id));
+    }
+
+    public Map<String, Object> getClassStudents(Long classId, String keyword) {
+        if (classId == null) {
+            return map("items", List.of(), "total", 0);
+        }
+        String text = defaultString(keyword, "");
+        StringBuilder sql = new StringBuilder("""
+            SELECT
+                s.id,
+                s.student_no,
+                s.student_name,
+                s.gender,
+                s.class_id,
+                bc.class_name,
+                s.major_id,
+                bm.major_name,
+                s.phone,
+                s.email,
+                s.status
+            FROM base_student s
+            LEFT JOIN base_class bc ON bc.id = s.class_id
+            LEFT JOIN base_major bm ON bm.id = s.major_id
+            WHERE s.status = 1
+              AND s.class_id = :classId
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("classId", classId);
+        if (StringUtils.hasText(text)) {
+            sql.append(" AND (s.student_no LIKE :keyword OR s.student_name LIKE :keyword)");
+            params.addValue("keyword", "%" + text.trim() + "%");
+        }
+        sql.append(" ORDER BY s.student_no ASC, s.id ASC");
+        List<Map<String, Object>> rows = jdbcTemplate.query(sql.toString(), params, (rs, rowNum) -> studentMap(rs));
+        return map("items", rows, "total", rows.size());
+    }
+
+    public Map<String, Object> uploadStudents(Long classId, MultipartFile file) {
+        if (classId == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, 400, "导入学生时必须选择班级。");
+        }
+        if (file == null || file.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, 400, "请先上传学生信息文件。");
+        }
+        validateGradeFileName(defaultString(file.getOriginalFilename(), "students.csv"));
+        Map<String, Object> classRow = getClassById(classId);
+        Long majorId = nullableLong(classRow.get("majorId"));
+        try {
+            StudentImportResult result = parseStudentFile(file, defaultString(file.getOriginalFilename(), ""), classId, majorId);
+            for (StudentImportRow row : result.rows()) {
+                if (!row.valid()) {
+                    continue;
+                }
+                upsertStudent(row.studentNo(), row.studentName(), row.gender(), classId, majorId, row.phone(), row.email());
+            }
+            refreshClassStudentCount(classId);
+            return map(
+                "success", true,
+                "importedCount", result.validRows(),
+                "skippedCount", result.errorRows(),
+                "errors", result.errors(),
+                "students", getClassStudents(classId, "").get("items")
+            );
+        } catch (IOException exception) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, 400, "学生信息文件读取失败，请检查文件是否损坏。");
+        }
+    }
+
+    public Map<String, Object> saveStudent(Long id, Map<String, Object> payload) {
+        Long classId = nullableLong(payload.get("classId"));
+        String studentNo = defaultString(payload.get("studentNo"), "").trim();
+        String studentName = defaultString(payload.get("studentName"), "").trim();
+        String gender = defaultString(payload.get("gender"), "").trim();
+        Long majorId = nullableLong(payload.get("majorId"));
+        String phone = defaultString(payload.get("phone"), "").trim();
+        String email = defaultString(payload.get("email"), "").trim();
+        if (!StringUtils.hasText(studentNo)) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学号不能为空。");
+        }
+        if (!StringUtils.hasText(studentName)) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "姓名不能为空。");
+        }
+        if (majorId == null && classId != null) {
+            majorId = nullableLong(getClassById(classId).get("majorId"));
+        }
+        if (id == null) {
+            id = upsertStudent(studentNo, studentName, gender, classId, majorId, phone, email);
+        } else {
+            jdbcTemplate.update("""
+                UPDATE base_student
+                SET student_no = :studentNo,
+                    student_name = :studentName,
+                    gender = :gender,
+                    class_id = :classId,
+                    major_id = :majorId,
+                    phone = :phone,
+                    email = :email,
+                    status = 1,
+                    updated_at = NOW()
+                WHERE id = :id
+                """, new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("studentNo", studentNo)
+                .addValue("studentName", studentName)
+                .addValue("gender", gender)
+                .addValue("classId", classId)
+                .addValue("majorId", majorId)
+                .addValue("phone", phone)
+                .addValue("email", email));
+        }
+        if (classId != null) {
+            refreshClassStudentCount(classId);
+        }
+        linkStudentGrades(id, studentNo, classId);
+        return map("success", true, "item", getStudentById(id));
+    }
+
+    public Map<String, Object> deleteStudent(Long id) {
+        Map<String, Object> student = getStudentById(id);
+        Long classId = nullableLong(student.get("classId"));
+        jdbcTemplate.update("UPDATE base_student SET status = 0, updated_at = NOW() WHERE id = :id", params("id", id));
+        if (classId != null) {
+            refreshClassStudentCount(classId);
+        }
+        return map("success", true);
+    }
+
+    public Map<String, Object> getClassCourses(Long classId, String semester) {
+        StringBuilder sql = new StringBuilder("""
+            SELECT
+                cc.id,
+                cc.class_id,
+                bc.class_name,
+                cc.course_id,
+                c.course_code,
+                c.course_name,
+                cc.semester_id,
+                bs.semester_code,
+                cc.teacher_id,
+                u.real_name AS teacher_name,
+                cc.status
+            FROM class_course cc
+            JOIN base_class bc ON bc.id = cc.class_id
+            JOIN base_course c ON c.id = cc.course_id
+            JOIN base_semester bs ON bs.id = cc.semester_id
+            LEFT JOIN sys_user u ON u.id = cc.teacher_id
+            WHERE cc.status = 1
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (classId != null) {
+            sql.append(" AND cc.class_id = :classId");
+            params.addValue("classId", classId);
+        }
+        if (StringUtils.hasText(semester)) {
+            sql.append(" AND bs.semester_code = :semester");
+            params.addValue("semester", semester);
+        }
+        sql.append(" ORDER BY bs.semester_code DESC, bc.class_code ASC, c.course_code ASC");
+        List<Map<String, Object>> rows = jdbcTemplate.query(sql.toString(), params, (rs, rowNum) -> classCourseMap(rs));
+        return map("items", rows, "total", rows.size());
+    }
+
+    public Map<String, Object> saveClassCourse(Map<String, Object> payload) {
+        long classId = longValue(payload.get("classId"));
+        long courseId = longValue(payload.get("courseId"));
+        String semester = defaultString(payload.get("semester"), "");
+        long semesterId = requireSemesterId(semester);
+        Long teacherId = nullableLong(payload.get("teacherId"));
+        if (teacherId == null) {
+            teacherId = resolveTeacherId(courseId, semesterId);
+        }
+        jdbcTemplate.update("""
+            INSERT INTO class_course (class_id, course_id, semester_id, teacher_id, status)
+            VALUES (:classId, :courseId, :semesterId, :teacherId, 1)
+            ON DUPLICATE KEY UPDATE
+                teacher_id = VALUES(teacher_id),
+                status = 1,
+                updated_at = NOW()
+            """, new MapSqlParameterSource()
+            .addValue("classId", classId)
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId)
+            .addValue("teacherId", teacherId));
+        return getClassCourses(classId, semester);
+    }
+
+    public Map<String, Object> deleteClassCourse(Long id) {
+        jdbcTemplate.update("UPDATE class_course SET status = 0, updated_at = NOW() WHERE id = :id", params("id", id));
+        return map("success", true);
+    }
+
+    public Map<String, Object> uploadGradeFile(Long courseId, Long classId, Long assessItemId, String semester, MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, 400, "请先上传成绩文件。");
         }
@@ -971,15 +1290,16 @@ public class InMemoryCoaService {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update("""
             INSERT INTO grade_import_batch (
-                batch_no, course_id, assess_item_id, teacher_id, semester_id, source_file_name,
+                batch_no, course_id, class_id, assess_item_id, teacher_id, semester_id, source_file_name,
                 status, total_rows, valid_rows, error_rows, import_mode
             ) VALUES (
-                :batchNo, :courseId, :assessItemId, :teacherId, :semesterId, :fileName,
+                :batchNo, :courseId, :classId, :assessItemId, :teacherId, :semesterId, :fileName,
                 'PARSING', 12, 10, 2, 'valid_only'
             )
             """, new MapSqlParameterSource()
             .addValue("batchNo", batchNo)
             .addValue("courseId", currentCourseId)
+            .addValue("classId", classId)
             .addValue("assessItemId", batchAssessItemId)
             .addValue("teacherId", teacherId)
             .addValue("semesterId", semesterId)
@@ -988,7 +1308,7 @@ public class InMemoryCoaService {
 
         try {
             GradeImportResult result = parseGradeFile(file, fileName, assessItems);
-            persistGradeImportRows(batchId, currentCourseId, semesterId, teacherId, result.rows());
+            persistGradeImportRows(batchId, currentCourseId, classId, semesterId, teacherId, result.rows());
             markDuplicateGradeRows(batchId, currentCourseId, semesterId);
             refreshGradeBatchCounts(batchId);
             jdbcTemplate.update("""
@@ -1443,12 +1763,15 @@ public class InMemoryCoaService {
 
         String keyword = defaultString(filters.get("keyword"), "");
         String assessItemId = defaultString(filters.get("assessItemId"), "");
+        String classId = defaultString(filters.get("classId"), "");
 
         StringBuilder sql = new StringBuilder("""
             SELECT
                 sg.id,
                 sg.student_no,
                 sg.student_name,
+                sg.class_id,
+                bc.class_name,
                 sg.score,
                 sg.max_score,
                 c.course_name,
@@ -1462,6 +1785,7 @@ public class InMemoryCoaService {
             JOIN base_course c ON c.id = sg.course_id
             JOIN assess_item ai ON ai.id = sg.assess_item_id
             JOIN base_semester bs ON bs.id = sg.semester_id
+            LEFT JOIN base_class bc ON bc.id = sg.class_id
             WHERE gb.status = 'CONFIRMED'
               AND sg.valid_flag = 1
               AND sg.course_id = :courseId
@@ -1471,6 +1795,7 @@ public class InMemoryCoaService {
             .addValue("courseId", courseId)
             .addValue("semesterId", semesterId);
         appendTextFilter(sql, params, "assessItemId", assessItemId, "sg.assess_item_id = :assessItemId");
+        appendTextFilter(sql, params, "classId", classId, "sg.class_id = :classId");
         if (StringUtils.hasText(keyword)) {
             sql.append(" AND (sg.student_no LIKE :keyword OR sg.student_name LIKE :keyword)");
             params.addValue("keyword", "%" + keyword.trim() + "%");
@@ -1481,6 +1806,8 @@ public class InMemoryCoaService {
             "id", rs.getLong("id"),
             "studentNo", rs.getString("student_no"),
             "studentName", rs.getString("student_name"),
+            "classId", nullableLong(rs.getObject("class_id")),
+            "className", defaultString(rs.getString("class_name"), ""),
             "score", rs.getBigDecimal("score"),
             "maxScore", rs.getBigDecimal("max_score"),
             "assessItemId", rs.getLong("assess_item_id"),
@@ -1510,6 +1837,7 @@ public class InMemoryCoaService {
 
     public Map<String, Object> saveImportedGradeRow(Map<String, Object> payload) {
         long courseId = longValue(payload.get("courseId"));
+        Long classId = nullableLong(payload.get("classId"));
         String semester = defaultString(payload.get("semester"), "");
         long semesterId = requireSemesterId(semester);
         long teacherId = resolveTeacherId(courseId, semesterId);
@@ -1521,6 +1849,12 @@ public class InMemoryCoaService {
         if (!StringUtils.hasText(studentName)) {
             throw new ApiException(UNPROCESSABLE_STATUS, 400, "姓名不能为空。");
         }
+        Long studentId = findStudentId(studentNo);
+        if (studentId == null && classId != null) {
+            Long majorId = nullableLong(getClassById(classId).get("majorId"));
+            studentId = upsertStudent(studentNo, studentName, "", classId, majorId, "", "");
+        }
+        Long resolvedClassId = classId != null ? classId : findStudentClassId(studentNo);
 
         long batchId = ensureManualGradeBatch(courseId, semesterId, teacherId);
         List<Map<String, Object>> cells = listOfMap(payload.get("cells"));
@@ -1542,14 +1876,16 @@ public class InMemoryCoaService {
             if (gradeId == null) {
                 jdbcTemplate.update("""
                     INSERT INTO student_grade (
-                        course_id, assess_item_id, semester_id, import_batch_id, student_no, student_name,
+                        course_id, class_id, student_id, assess_item_id, semester_id, import_batch_id, student_no, student_name,
                         score, max_score, valid_flag, error_message, created_by
                     ) VALUES (
-                        :courseId, :assessItemId, :semesterId, :batchId, :studentNo, :studentName,
+                        :courseId, :classId, :studentId, :assessItemId, :semesterId, :batchId, :studentNo, :studentName,
                         :score, :maxScore, 1, NULL, :createdBy
                     )
                     """, new MapSqlParameterSource()
                     .addValue("courseId", courseId)
+                    .addValue("classId", resolvedClassId)
+                    .addValue("studentId", studentId)
                     .addValue("assessItemId", assessItemId)
                     .addValue("semesterId", semesterId)
                     .addValue("batchId", batchId)
@@ -1563,6 +1899,8 @@ public class InMemoryCoaService {
                     UPDATE student_grade
                     SET student_no = :studentNo,
                         student_name = :studentName,
+                        class_id = :classId,
+                        student_id = :studentId,
                         score = :score,
                         max_score = :maxScore,
                         valid_flag = 1,
@@ -1577,6 +1915,8 @@ public class InMemoryCoaService {
                     .addValue("semesterId", semesterId)
                     .addValue("studentNo", studentNo)
                     .addValue("studentName", studentName)
+                    .addValue("classId", resolvedClassId)
+                    .addValue("studentId", studentId)
                     .addValue("score", round2(score.score()))
                     .addValue("maxScore", round2(maxScore)));
             }
@@ -1889,6 +2229,9 @@ public class InMemoryCoaService {
 
         List<Map<String, Object>> results = achievementResults(currentCourseId, semesterId, false);
         Map<String, Object> overall = achievementOverall(currentCourseId, semesterId);
+        Map<String, Object> dataSummary = buildAchievementDataSummary(currentCourseId, semesterId, outlineId);
+        double overallAchievement = doubleValue(overall.get("achieve_value"));
+        double thresholdValue = doubleValue(config.get("threshold_value"));
 
         List<Map<String, Object>> objectives = outlineId != null ? jdbcTemplate.query("""
             SELECT id, obj_code
@@ -1915,9 +2258,11 @@ public class InMemoryCoaService {
                 "retakeEnabled", retakeEnabled
             ),
             "generatedAt", defaultString(overall.get("calc_time"), ""),
-            "overallAchievement", doubleValue(overall.get("achieve_value")),
+            "overallAchievement", overallAchievement,
             "results", results,
-            "dataSummary", buildAchievementDataSummary(currentCourseId, semesterId, outlineId)
+            "dataSummary", dataSummary,
+            "smartAnalysis", buildAchievementSmartAnalysis(results, dataSummary, overallAchievement, thresholdValue),
+            "chartData", buildAchievementChartData(results, dataSummary)
         ));
         return result;
     }
@@ -2542,8 +2887,26 @@ public class InMemoryCoaService {
         return map(
             "courses", catalogCourses(),
             "semesters", catalogSemesters(),
-            "assessItems", catalogAssessItems()
+            "assessItems", catalogAssessItems(),
+            "classes", catalogClasses(),
+            "majors", catalogMajors()
         );
+    }
+
+    private List<Map<String, Object>> catalogMajors() {
+        return plainJdbcTemplate.query("""
+            SELECT m.id, m.major_name, m.major_code, m.college_id, c.college_name
+            FROM base_major m
+            LEFT JOIN base_college c ON c.id = m.college_id
+            WHERE m.status = 1
+            ORDER BY m.id ASC
+            """, (rs, rowNum) -> map(
+            "id", rs.getLong("id"),
+            "name", rs.getString("major_name"),
+            "code", rs.getString("major_code"),
+            "collegeId", nullableLong(rs.getObject("college_id")),
+            "collegeName", defaultString(rs.getString("college_name"), "")
+        ));
     }
 
     private List<Map<String, Object>> catalogCourses() {
@@ -2599,6 +2962,24 @@ public class InMemoryCoaService {
             "semester", defaultString(rs.getString("semester_code"), normalizeSemester(null)),
             "outlineId", nullableLong(rs.getObject("outline_id"))
         ));
+    }
+
+    private List<Map<String, Object>> catalogClasses() {
+        return plainJdbcTemplate.query("""
+            SELECT
+                bc.id,
+                bc.class_code,
+                bc.class_name,
+                bc.major_id,
+                bm.major_name,
+                bc.grade_year,
+                bc.student_count,
+                bc.status
+            FROM base_class bc
+            LEFT JOIN base_major bm ON bm.id = bc.major_id
+            WHERE bc.status = 1
+            ORDER BY bc.grade_year DESC, bc.class_code ASC, bc.id ASC
+            """, (rs, rowNum) -> classMap(rs));
     }
 
     private List<String> catalogSemesters() {
@@ -2765,6 +3146,25 @@ public class InMemoryCoaService {
                 "relatedObjectives", relatedObjectives,
                 "requirements", requirements,
                 "sourceText", sourceText
+            ));
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> normalizeAssessItems(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            String itemName = defaultString(row.get("itemName"), defaultString(row.get("name"), ""));
+            String itemType = defaultString(row.get("itemType"), "normal");
+            if (!StringUtils.hasText(itemName)) {
+                throw new ApiException(UNPROCESSABLE_STATUS, 400, "考核项名称不能为空。");
+            }
+            result.add(map(
+                "id", nullableLong(row.get("id")),
+                "itemName", itemName,
+                "itemType", itemType,
+                "weight", BigDecimal.valueOf(round2(doubleValue(row.get("weight")))),
+                "maxScore", Optional.ofNullable(nullableBigDecimal(row.get("maxScore"))).orElse(BigDecimal.valueOf(100))
             ));
         }
         return result;
@@ -3120,9 +3520,10 @@ public class InMemoryCoaService {
         ensureColumn("base_course", "target_students",     "VARCHAR(255) NULL");
         ensureColumn("base_course", "teaching_language",   "VARCHAR(100) NULL");
         ensureColumn("base_course", "hours",               "INT NULL");
-        ensureColumn("base_course", "credits",             "DECIMAL(4,1) NULL");
+        ensureColumn("base_course", "credits",             "DECIMAL(3,1) NULL");
         ensureColumn("base_course", "prerequisite_course", "VARCHAR(255) NULL");
         ensureColumn("base_course", "course_owner",        "VARCHAR(100) NULL");
+        ensureColumnDefinition("base_course", "course_type", "VARCHAR(100) NULL", "varchar(100)", "YES", null, null);
         ensureColumn("parse_task",  "parsed_course_json",   "TEXT NULL");
         ensureColumn("parse_task",  "parsed_mapping_json",  "TEXT NULL");
         ensureColumn("parse_task",  "obj_assess_matrix_json", "TEXT NULL");
@@ -3136,8 +3537,85 @@ public class InMemoryCoaService {
         ensureColumn("teach_objective", "grad_req_desc", "VARCHAR(500) NULL");
         ensureColumn("teach_objective", "relation_level", "VARCHAR(4) DEFAULT 'H'");
         ensureColumn("intelligent_suggestion", "suggestion_source", "VARCHAR(30) DEFAULT 'RULE'");
+        ensureColumnDefinition("teach_objective", "relation_level", "VARCHAR(4) NOT NULL DEFAULT 'H'", "varchar(4)", "NO", "H", "'H'");
+        ensureColumnDefinition("intelligent_suggestion", "suggestion_source", "VARCHAR(30) NOT NULL DEFAULT 'RULE'", "varchar(30)", "NO", "RULE", "'RULE'");
         ensureCourseTeachingContentTable();
+        ensureCollectSchema();
         migrateParsedTeachingContentsToTable();
+    }
+
+    private void ensureCollectSchema() {
+        try {
+            plainJdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS base_class (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    class_code VARCHAR(50) NOT NULL,
+                    class_name VARCHAR(100) NOT NULL,
+                    major_id BIGINT NULL,
+                    grade_year VARCHAR(20) NULL,
+                    student_count INT NOT NULL DEFAULT 0,
+                    status TINYINT NOT NULL DEFAULT 1,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_base_class_code (class_code),
+                    KEY idx_base_class_major (major_id),
+                    CONSTRAINT fk_base_class_major FOREIGN KEY (major_id) REFERENCES base_major (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='班级表'
+                """);
+            plainJdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS base_student (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    student_no VARCHAR(30) NOT NULL,
+                    student_name VARCHAR(50) NOT NULL,
+                    gender VARCHAR(10) NULL,
+                    class_id BIGINT NULL,
+                    major_id BIGINT NULL,
+                    phone VARCHAR(20) NULL,
+                    email VARCHAR(100) NULL,
+                    status TINYINT NOT NULL DEFAULT 1,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_base_student_no (student_no),
+                    KEY idx_base_student_class (class_id),
+                    KEY idx_base_student_major (major_id),
+                    CONSTRAINT fk_base_student_class FOREIGN KEY (class_id) REFERENCES base_class (id) ON DELETE SET NULL,
+                    CONSTRAINT fk_base_student_major FOREIGN KEY (major_id) REFERENCES base_major (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学生基础信息表'
+                """);
+            plainJdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS class_course (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    class_id BIGINT NOT NULL,
+                    course_id BIGINT NOT NULL,
+                    semester_id BIGINT NOT NULL,
+                    teacher_id BIGINT NULL,
+                    status TINYINT NOT NULL DEFAULT 1,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_class_course_scope (class_id, course_id, semester_id),
+                    KEY idx_class_course_course (course_id, semester_id),
+                    KEY idx_class_course_teacher (teacher_id),
+                    CONSTRAINT fk_class_course_class FOREIGN KEY (class_id) REFERENCES base_class (id) ON DELETE CASCADE,
+                    CONSTRAINT fk_class_course_course FOREIGN KEY (course_id) REFERENCES base_course (id) ON DELETE CASCADE,
+                    CONSTRAINT fk_class_course_semester FOREIGN KEY (semester_id) REFERENCES base_semester (id),
+                    CONSTRAINT fk_class_course_teacher FOREIGN KEY (teacher_id) REFERENCES sys_user (id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='班级开课表'
+                """);
+            ensureColumn("grade_import_batch", "class_id", "BIGINT NULL");
+            ensureColumn("student_grade", "class_id", "BIGINT NULL");
+            ensureColumn("student_grade", "student_id", "BIGINT NULL");
+            ensureIndex("grade_import_batch", "idx_grade_import_class", List.of("class_id", "semester_id"));
+            ensureIndex("student_grade", "idx_student_grade_class", List.of("class_id", "semester_id"));
+            ensureIndex("student_grade", "fk_student_grade_student", List.of("student_id"));
+            ensureForeignKey("grade_import_batch", "fk_grade_import_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
+            ensureForeignKey("student_grade", "fk_student_grade_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
+            ensureForeignKey("student_grade", "fk_student_grade_student", "student_id", "base_student", "id", "ON DELETE SET NULL");
+        } catch (Exception e) {
+            log.warn("Schema migration failed for collect tables: {}", e.getMessage());
+        }
     }
 
     private void ensureCourseTeachingContentTable() {
@@ -3229,6 +3707,92 @@ public class InMemoryCoaService {
             }
         } catch (Exception e) {
             log.warn("Schema migration failed for {}.{}: {}", table, column, e.getMessage());
+        }
+    }
+
+    private void ensureColumnDefinition(
+        String table,
+        String column,
+        String definition,
+        String expectedType,
+        String expectedNullable,
+        String expectedDefault,
+        String fillNullSql
+    ) {
+        try {
+            String dbName = plainJdbcTemplate.queryForObject("SELECT DATABASE()", String.class);
+            Map<String, Object> meta = plainJdbcTemplate.query("""
+                SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = ?
+                  AND TABLE_NAME = ?
+                  AND COLUMN_NAME = ?
+                """, rs -> rs.next() ? map(
+                "columnType", rs.getString("COLUMN_TYPE"),
+                "isNullable", rs.getString("IS_NULLABLE"),
+                "columnDefault", rs.getString("COLUMN_DEFAULT")
+            ) : Map.of(), dbName, table, column);
+            if (meta.isEmpty()) {
+                return;
+            }
+            boolean typeChanged = !expectedType.equalsIgnoreCase(defaultString(meta.get("columnType"), ""));
+            boolean nullableChanged = !expectedNullable.equalsIgnoreCase(defaultString(meta.get("isNullable"), ""));
+            boolean defaultChanged = !defaultString(expectedDefault, "").equals(defaultString(meta.get("columnDefault"), ""));
+            if (typeChanged || nullableChanged || defaultChanged) {
+                if (StringUtils.hasText(fillNullSql)) {
+                    plainJdbcTemplate.execute("UPDATE `" + table + "` SET `" + column + "` = " + fillNullSql + " WHERE `" + column + "` IS NULL");
+                }
+                plainJdbcTemplate.execute("ALTER TABLE `" + table + "` MODIFY COLUMN `" + column + "` " + definition);
+                log.info("Schema migration: modified column {}.{}", table, column);
+            }
+        } catch (Exception e) {
+            log.warn("Schema migration failed for {}.{} definition: {}", table, column, e.getMessage());
+        }
+    }
+
+    private void ensureIndex(String table, String indexName, List<String> columns) {
+        try {
+            String dbName = plainJdbcTemplate.queryForObject("SELECT DATABASE()", String.class);
+            Integer count = plainJdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?",
+                Integer.class, dbName, table, indexName);
+            if (count == null || count == 0) {
+                String columnSql = columns.stream()
+                    .map(column -> "`" + column + "`")
+                    .collect(Collectors.joining(", "));
+                plainJdbcTemplate.execute("ALTER TABLE `" + table + "` ADD INDEX `" + indexName + "` (" + columnSql + ")");
+                log.info("Schema migration: added index {}.{}", table, indexName);
+            }
+        } catch (Exception e) {
+            log.warn("Schema migration failed for index {}.{}: {}", table, indexName, e.getMessage());
+        }
+    }
+
+    private void ensureForeignKey(
+        String table,
+        String constraintName,
+        String column,
+        String referencedTable,
+        String referencedColumn,
+        String action
+    ) {
+        try {
+            String dbName = plainJdbcTemplate.queryForObject("SELECT DATABASE()", String.class);
+            Integer count = plainJdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.TABLE_CONSTRAINTS
+                WHERE CONSTRAINT_SCHEMA = ?
+                  AND TABLE_NAME = ?
+                  AND CONSTRAINT_NAME = ?
+                  AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+                """, Integer.class, dbName, table, constraintName);
+            if (count == null || count == 0) {
+                plainJdbcTemplate.execute("ALTER TABLE `" + table + "` ADD CONSTRAINT `" + constraintName + "` FOREIGN KEY (`"
+                    + column + "`) REFERENCES `" + referencedTable + "` (`" + referencedColumn + "`) " + action);
+                log.info("Schema migration: added foreign key {}.{}", table, constraintName);
+            }
+        } catch (Exception e) {
+            log.warn("Schema migration failed for foreign key {}.{}: {}", table, constraintName, e.getMessage());
         }
     }
 
@@ -3661,6 +4225,64 @@ public class InMemoryCoaService {
         return merged;
     }
 
+    private void mergeExplicitReviewOverwrite(Map<String, Object> reviewOverwrite, Map<String, Object> payload) {
+        Map<String, String> keyMap = Map.of(
+            "teachingContents", "overwriteTeachingContents",
+            "assessmentPolicy", "overwriteAssessmentPolicy",
+            "assessmentDetails", "overwriteAssessmentDetails",
+            "assessmentStandards", "overwriteAssessmentStandards",
+            "objectives", "overwriteObjectives",
+            "assessItems", "overwriteAssessItems",
+            "mapping", "overwriteMappings"
+        );
+        keyMap.forEach((sectionKey, payloadKey) -> {
+            if (payload.containsKey(payloadKey)) {
+                reviewOverwrite.put(sectionKey, booleanValue(payload.get(payloadKey)));
+            }
+        });
+    }
+
+    private Map<String, Object> applyParsedSectionOverwritePolicy(
+        Map<String, Object> submitted,
+        Map<String, Object> existing,
+        Map<String, Object> reviewOverwrite
+    ) {
+        if (existing == null || existing.isEmpty()) {
+            return submitted;
+        }
+        LinkedHashMap<String, Object> result = new LinkedHashMap<>(submitted);
+        preserveExistingParsedSection(result, existing, reviewOverwrite, "teachingContents");
+        preserveExistingParsedSection(result, existing, reviewOverwrite, "assessmentPolicy");
+        preserveExistingParsedSection(result, existing, reviewOverwrite, "assessmentDetails");
+        preserveExistingParsedSection(result, existing, reviewOverwrite, "assessmentStandards");
+        return result;
+    }
+
+    private void preserveExistingParsedSection(
+        Map<String, Object> result,
+        Map<String, Object> existing,
+        Map<String, Object> reviewOverwrite,
+        String key
+    ) {
+        if (booleanValue(reviewOverwrite.get(key))) {
+            return;
+        }
+        Object existingValue = existing.get(key);
+        if (hasStructuredCourseSection(existingValue)) {
+            result.put(key, existingValue);
+        }
+    }
+
+    private boolean hasStructuredCourseSection(Object value) {
+        if (value instanceof List<?> list) {
+            return !list.isEmpty();
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.values().stream().anyMatch(item -> StringUtils.hasText(defaultString(item, "")));
+        }
+        return StringUtils.hasText(defaultString(value, ""));
+    }
+
     private Object courseInfoValue(Map<String, Object> submittedCourse, Map<String, Object> parsedCourse, String key, Object defaultValue) {
         if (submittedCourse.containsKey(key)) {
             return submittedCourse.get(key);
@@ -3869,12 +4491,21 @@ public class InMemoryCoaService {
     }
 
     private void clearOutlineImportData(long outlineId) {
+        clearObjectiveImportData(outlineId);
+        clearAssessImportData(outlineId);
+    }
+
+    private void clearObjectiveAssessMappings(long outlineId) {
         jdbcTemplate.update("""
             DELETE FROM obj_assess_map
             WHERE objective_id IN (
                 SELECT id FROM teach_objective WHERE outline_id = :outlineId
             )
             """, params("outlineId", outlineId));
+    }
+
+    private void clearObjectiveImportData(long outlineId) {
+        clearObjectiveAssessMappings(outlineId);
         jdbcTemplate.update("""
             DELETE FROM obj_decompose
             WHERE objective_id IN (
@@ -3882,7 +4513,11 @@ public class InMemoryCoaService {
             )
             """, params("outlineId", outlineId));
         jdbcTemplate.update("DELETE FROM teach_objective WHERE outline_id = :outlineId", params("outlineId", outlineId));
-        jdbcTemplate.update("DELETE FROM assess_item WHERE outline_id = :outlineId", params("outlineId", outlineId));
+    }
+
+    private void clearAssessImportData(long outlineId) {
+        clearObjectiveAssessMappings(outlineId);
+        deleteUnretainedAssessItemsSafely(outlineId, Set.of());
     }
 
     private long resolveParseTaskId(String taskId) {
@@ -4019,6 +4654,121 @@ public class InMemoryCoaService {
         }
     }
 
+    private void replaceAssessItemsSafely(long outlineId, List<Map<String, Object>> assessDrafts) {
+        List<Map<String, Object>> existingItems = assessItemListByOutline(outlineId);
+        Set<Long> retainedIds = new LinkedHashSet<>();
+        int sortOrder = 1;
+        for (Map<String, Object> item : assessDrafts) {
+            Long existingId = findReusableAssessItemId(existingItems, retainedIds, item);
+            if (existingId == null) {
+                GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+                jdbcTemplate.update("""
+                    INSERT INTO assess_item (
+                        outline_id, item_name, item_type, weight, max_score, sort_order
+                    ) VALUES (
+                        :outlineId, :itemName, :itemType, :weight, :maxScore, :sortOrder
+                    )
+                    """, new MapSqlParameterSource()
+                    .addValue("outlineId", outlineId)
+                    .addValue("itemName", item.get("itemName"))
+                    .addValue("itemType", item.get("itemType"))
+                    .addValue("weight", item.get("weight"))
+                    .addValue("maxScore", Optional.ofNullable(nullableBigDecimal(item.get("maxScore"))).orElse(BigDecimal.valueOf(100)))
+                    .addValue("sortOrder", sortOrder++), keyHolder);
+                retainedIds.add(keyHolder.getKey().longValue());
+                continue;
+            }
+
+            retainedIds.add(existingId);
+            jdbcTemplate.update("""
+                UPDATE assess_item
+                SET item_name = :itemName,
+                    item_type = :itemType,
+                    weight = :weight,
+                    max_score = :maxScore,
+                    sort_order = :sortOrder,
+                    updated_at = NOW()
+                WHERE id = :id
+                """, new MapSqlParameterSource()
+                .addValue("id", existingId)
+                .addValue("itemName", item.get("itemName"))
+                .addValue("itemType", item.get("itemType"))
+                .addValue("weight", item.get("weight"))
+                .addValue("maxScore", Optional.ofNullable(nullableBigDecimal(item.get("maxScore"))).orElse(BigDecimal.valueOf(100)))
+                .addValue("sortOrder", sortOrder++));
+        }
+
+        deleteUnretainedAssessItemsSafely(outlineId, retainedIds);
+    }
+
+    private Long findReusableAssessItemId(List<Map<String, Object>> existingItems, Set<Long> retainedIds, Map<String, Object> draft) {
+        Long draftId = nullableLong(draft.get("id"));
+        if (draftId != null) {
+            for (Map<String, Object> item : existingItems) {
+                long id = longValue(item.get("id"));
+                if (!retainedIds.contains(id) && id == draftId) {
+                    return id;
+                }
+            }
+        }
+
+        String draftName = normalizeKey(defaultString(draft.get("itemName"), ""));
+        for (Map<String, Object> item : existingItems) {
+            long id = longValue(item.get("id"));
+            if (!retainedIds.contains(id) && normalizeKey(defaultString(item.get("itemName"), "")).equals(draftName)) {
+                return id;
+            }
+        }
+
+        String draftType = defaultString(draft.get("itemType"), "");
+        for (Map<String, Object> item : existingItems) {
+            long id = longValue(item.get("id"));
+            if (!retainedIds.contains(id)
+                && StringUtils.hasText(draftType)
+                && draftType.equals(defaultString(item.get("itemType"), ""))) {
+                return id;
+            }
+        }
+
+        return existingItems.stream()
+            .map(item -> longValue(item.get("id")))
+            .filter(id -> !retainedIds.contains(id))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private void deleteUnretainedAssessItemsSafely(long outlineId, Set<Long> retainedIds) {
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("outlineId", outlineId);
+        String retainedFilter = "";
+        if (!retainedIds.isEmpty()) {
+            retainedFilter = " AND id NOT IN (:retainedIds) ";
+            params.addValue("retainedIds", retainedIds);
+        }
+
+        jdbcTemplate.update("""
+            DELETE FROM assess_item
+            WHERE outline_id = :outlineId
+            """ + retainedFilter + """
+              AND id NOT IN (SELECT DISTINCT assess_item_id FROM grade_import_batch WHERE assess_item_id IS NOT NULL)
+              AND id NOT IN (SELECT DISTINCT assess_item_id FROM student_grade WHERE assess_item_id IS NOT NULL)
+              AND id NOT IN (SELECT DISTINCT assess_item_id FROM achieve_result_detail WHERE assess_item_id IS NOT NULL)
+            """, params);
+
+        jdbcTemplate.update("""
+            UPDATE assess_item
+            SET weight = 0,
+                sort_order = CASE WHEN sort_order < 1000 THEN 1000 + sort_order ELSE sort_order END,
+                updated_at = NOW()
+            WHERE outline_id = :outlineId
+            """ + retainedFilter + """
+              AND (
+                id IN (SELECT DISTINCT assess_item_id FROM grade_import_batch WHERE assess_item_id IS NOT NULL)
+                OR id IN (SELECT DISTINCT assess_item_id FROM student_grade WHERE assess_item_id IS NOT NULL)
+                OR id IN (SELECT DISTINCT assess_item_id FROM achieve_result_detail WHERE assess_item_id IS NOT NULL)
+              )
+            """, params);
+    }
+
     private long getCourseIdByOutline(long outlineId) {
         return queryLong("""
             SELECT course_id
@@ -4131,7 +4881,8 @@ public class InMemoryCoaService {
     private int applyParsedObjectiveAssessMappings(
         long outlineId,
         List<Map<String, Object>> objectiveDrafts,
-        List<Map<String, Object>> mappingSuggestions
+        List<Map<String, Object>> mappingSuggestions,
+        boolean replaceExisting
     ) {
         if (mappingSuggestions.isEmpty()) {
             return 0;
@@ -4143,12 +4894,9 @@ public class InMemoryCoaService {
             return 0;
         }
 
-        jdbcTemplate.update("""
-            DELETE FROM obj_assess_map
-            WHERE objective_id IN (
-                SELECT id FROM teach_objective WHERE outline_id = :outlineId
-            )
-            """, params("outlineId", outlineId));
+        if (replaceExisting) {
+            clearObjectiveAssessMappings(outlineId);
+        }
 
         int inserted = 0;
         for (Map<String, Object> suggestion : mappingSuggestions) {
@@ -4165,6 +4913,9 @@ public class InMemoryCoaService {
                 ) VALUES (
                     :objectiveId, :assessItemId, :contributionWeight
                 )
+                ON DUPLICATE KEY UPDATE
+                    contribution_weight = :contributionWeight,
+                    updated_at = NOW()
                 """, new MapSqlParameterSource()
                 .addValue("objectiveId", objectiveId)
                 .addValue("assessItemId", assessItemId)
@@ -4289,6 +5040,193 @@ public class InMemoryCoaService {
         }
     }
 
+    private Map<String, Object> classMap(ResultSet rs) throws SQLException {
+        return map(
+            "id", rs.getLong("id"),
+            "classCode", rs.getString("class_code"),
+            "className", rs.getString("class_name"),
+            "majorId", nullableLong(rs.getObject("major_id")),
+            "majorName", defaultString(rs.getString("major_name"), ""),
+            "gradeYear", defaultString(rs.getString("grade_year"), ""),
+            "studentCount", rs.getInt("student_count"),
+            "status", rs.getInt("status")
+        );
+    }
+
+    private Map<String, Object> studentMap(ResultSet rs) throws SQLException {
+        return map(
+            "id", rs.getLong("id"),
+            "studentNo", rs.getString("student_no"),
+            "studentName", rs.getString("student_name"),
+            "gender", defaultString(rs.getString("gender"), ""),
+            "classId", nullableLong(rs.getObject("class_id")),
+            "className", defaultString(rs.getString("class_name"), ""),
+            "majorId", nullableLong(rs.getObject("major_id")),
+            "majorName", defaultString(rs.getString("major_name"), ""),
+            "phone", defaultString(rs.getString("phone"), ""),
+            "email", defaultString(rs.getString("email"), ""),
+            "status", rs.getInt("status")
+        );
+    }
+
+    private Map<String, Object> classCourseMap(ResultSet rs) throws SQLException {
+        return map(
+            "id", rs.getLong("id"),
+            "classId", rs.getLong("class_id"),
+            "className", rs.getString("class_name"),
+            "courseId", rs.getLong("course_id"),
+            "courseCode", rs.getString("course_code"),
+            "courseName", rs.getString("course_name"),
+            "semesterId", rs.getLong("semester_id"),
+            "semester", rs.getString("semester_code"),
+            "teacherId", nullableLong(rs.getObject("teacher_id")),
+            "teacherName", defaultString(rs.getString("teacher_name"), ""),
+            "status", rs.getInt("status")
+        );
+    }
+
+    private Map<String, Object> getClassById(Long id) {
+        return requireMap("""
+            SELECT
+                bc.id,
+                bc.class_code,
+                bc.class_name,
+                bc.major_id,
+                bm.major_name,
+                bc.grade_year,
+                bc.student_count,
+                bc.status
+            FROM base_class bc
+            LEFT JOIN base_major bm ON bm.id = bc.major_id
+            WHERE bc.id = :id
+            """, params("id", id), this::classMap);
+    }
+
+    private Map<String, Object> getStudentById(Long id) {
+        return requireMap("""
+            SELECT
+                s.id,
+                s.student_no,
+                s.student_name,
+                s.gender,
+                s.class_id,
+                bc.class_name,
+                s.major_id,
+                bm.major_name,
+                s.phone,
+                s.email,
+                s.status
+            FROM base_student s
+            LEFT JOIN base_class bc ON bc.id = s.class_id
+            LEFT JOIN base_major bm ON bm.id = s.major_id
+            WHERE s.id = :id
+            """, params("id", id), this::studentMap);
+    }
+
+    private Long findStudentId(String studentNo) {
+        if (!StringUtils.hasText(studentNo)) return null;
+        return jdbcTemplate.query("""
+            SELECT id FROM base_student
+            WHERE student_no = :studentNo
+              AND status = 1
+            LIMIT 1
+            """, params("studentNo", studentNo), rs -> rs.next() ? rs.getLong("id") : null);
+    }
+
+    private Long findStudentClassId(String studentNo) {
+        if (!StringUtils.hasText(studentNo)) return null;
+        return jdbcTemplate.query("""
+            SELECT class_id FROM base_student
+            WHERE student_no = :studentNo
+              AND status = 1
+            LIMIT 1
+            """, params("studentNo", studentNo), rs -> rs.next() ? nullableLong(rs.getObject("class_id")) : null);
+    }
+
+    private long upsertStudent(
+        String studentNo,
+        String studentName,
+        String gender,
+        Long classId,
+        Long majorId,
+        String phone,
+        String email
+    ) {
+        Long existingId = findStudentId(studentNo);
+        if (existingId == null) {
+            GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+            jdbcTemplate.update("""
+                INSERT INTO base_student (
+                    student_no, student_name, gender, class_id, major_id, phone, email, status
+                ) VALUES (
+                    :studentNo, :studentName, :gender, :classId, :majorId, :phone, :email, 1
+                )
+                """, new MapSqlParameterSource()
+                .addValue("studentNo", studentNo)
+                .addValue("studentName", studentName)
+                .addValue("gender", gender)
+                .addValue("classId", classId)
+                .addValue("majorId", majorId)
+                .addValue("phone", phone)
+                .addValue("email", email), keyHolder);
+            existingId = keyHolder.getKey().longValue();
+        } else {
+            jdbcTemplate.update("""
+                UPDATE base_student
+                SET student_name = :studentName,
+                    gender = :gender,
+                    class_id = :classId,
+                    major_id = :majorId,
+                    phone = :phone,
+                    email = :email,
+                    status = 1,
+                    updated_at = NOW()
+                WHERE id = :id
+                """, new MapSqlParameterSource()
+                .addValue("id", existingId)
+                .addValue("studentName", studentName)
+                .addValue("gender", gender)
+                .addValue("classId", classId)
+                .addValue("majorId", majorId)
+                .addValue("phone", phone)
+                .addValue("email", email));
+        }
+        if (classId != null) {
+            refreshClassStudentCount(classId);
+        }
+        linkStudentGrades(existingId, studentNo, classId);
+        return existingId;
+    }
+
+    private void linkStudentGrades(Long studentId, String studentNo, Long classId) {
+        if (studentId == null || !StringUtils.hasText(studentNo)) return;
+        jdbcTemplate.update("""
+            UPDATE student_grade
+            SET student_id = :studentId,
+                class_id = COALESCE(class_id, :classId),
+                updated_at = NOW()
+            WHERE student_no = :studentNo
+            """, new MapSqlParameterSource()
+            .addValue("studentId", studentId)
+            .addValue("classId", classId)
+            .addValue("studentNo", studentNo));
+    }
+
+    private void refreshClassStudentCount(Long classId) {
+        if (classId == null) return;
+        jdbcTemplate.update("""
+            UPDATE base_class bc
+            SET student_count = (
+                SELECT COUNT(*)
+                FROM base_student s
+                WHERE s.class_id = bc.id
+                  AND s.status = 1
+            ),
+            updated_at = NOW()
+            WHERE bc.id = :classId
+            """, params("classId", classId));
+    }
+
     private List<Map<String, Object>> currentCourseAssessItems(long courseId, String semesterCode) {
         Long outlineId = findOutlineId(courseId, semesterCode);
         if (outlineId == null) {
@@ -4349,6 +5287,131 @@ public class InMemoryCoaService {
 
         int validRows = (int) imports.stream().filter(GradeImportRow::valid).count();
         return new GradeImportResult(imports, imports.size(), validRows, imports.size() - validRows);
+    }
+
+    private StudentImportResult parseStudentFile(
+        MultipartFile file,
+        String fileName,
+        Long classId,
+        Long majorId
+    ) throws IOException {
+        String lower = defaultString(fileName, "").toLowerCase(Locale.ROOT);
+        List<List<String>> rows = lower.endsWith(".csv") ? readCsvRows(file) : readStudentWorkbookRows(file);
+        if (rows.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件为空，请检查表头和数据行。");
+        }
+
+        int headerIndex = findStudentHeaderIndex(rows);
+        List<String> header = rows.get(headerIndex);
+        Map<String, Integer> columns = resolveStudentColumns(header);
+        if (!columns.containsKey("studentNo") || !columns.containsKey("studentName")) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件必须包含学号和姓名列。");
+        }
+
+        List<StudentImportRow> imports = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        for (int rowIndex = headerIndex + 1; rowIndex < rows.size(); rowIndex++) {
+            List<String> row = rows.get(rowIndex);
+            if (row.stream().allMatch(cell -> !StringUtils.hasText(cell))) {
+                continue;
+            }
+            String studentNo = cellAt(row, columns.get("studentNo"));
+            String studentName = cellAt(row, columns.get("studentName"));
+            String gender = columns.containsKey("gender") ? cellAt(row, columns.get("gender")) : "";
+            String phone = columns.containsKey("phone") ? cellAt(row, columns.get("phone")) : "";
+            String email = columns.containsKey("email") ? cellAt(row, columns.get("email")) : "";
+            String error = "";
+            if (!StringUtils.hasText(studentNo)) {
+                error = "学号不能为空";
+            } else if (!StringUtils.hasText(studentName)) {
+                error = "姓名不能为空";
+            }
+            boolean valid = !StringUtils.hasText(error);
+            if (!valid) {
+                errors.add("第 " + (rowIndex + 1) + " 行：" + error);
+            }
+            imports.add(new StudentImportRow(
+                rowIndex + 1,
+                studentNo,
+                studentName,
+                gender,
+                classId,
+                majorId,
+                phone,
+                email,
+                valid,
+                error
+            ));
+        }
+
+        int validRows = (int) imports.stream().filter(StudentImportRow::valid).count();
+        return new StudentImportResult(imports, validRows, imports.size() - validRows, errors);
+    }
+
+    private List<List<String>> readStudentWorkbookRows(MultipartFile file) throws IOException {
+        DataFormatter formatter = new DataFormatter(Locale.ROOT);
+        try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
+            if (workbook.getNumberOfSheets() == 0) {
+                return List.of();
+            }
+            List<List<String>> bestRows = readSheetRows(workbook.getSheetAt(0), formatter);
+            int bestScore = studentHeaderScore(bestRows);
+            for (int sheetIndex = 1; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
+                List<List<String>> rows = readSheetRows(workbook.getSheetAt(sheetIndex), formatter);
+                int score = studentHeaderScore(rows);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestRows = rows;
+                }
+            }
+            return bestRows;
+        }
+    }
+
+    private int findStudentHeaderIndex(List<List<String>> rows) {
+        int bestIndex = 0;
+        int bestScore = -1;
+        int inspectRows = Math.min(rows.size(), 20);
+        for (int index = 0; index < inspectRows; index++) {
+            int score = studentHeaderScore(List.of(rows.get(index)));
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = index;
+            }
+        }
+        return bestIndex;
+    }
+
+    private int studentHeaderScore(List<List<String>> rows) {
+        int best = 0;
+        int inspectRows = Math.min(rows.size(), 20);
+        for (int index = 0; index < inspectRows; index++) {
+            Map<String, Integer> columns = resolveStudentColumns(rows.get(index));
+            int score = columns.size() * 20;
+            if (columns.containsKey("studentNo")) score += 80;
+            if (columns.containsKey("studentName")) score += 80;
+            best = Math.max(best, score);
+        }
+        return best;
+    }
+
+    private Map<String, Integer> resolveStudentColumns(List<String> headers) {
+        Map<String, Integer> columns = new LinkedHashMap<>();
+        for (int index = 0; index < headers.size(); index++) {
+            String header = normalizeGradeHeader(headers.get(index));
+            if (!columns.containsKey("studentNo") && (header.contains("学号") || header.contains("学生编号"))) {
+                columns.put("studentNo", index);
+            } else if (!columns.containsKey("studentName") && (header.contains("姓名") || header.contains("学生姓名"))) {
+                columns.put("studentName", index);
+            } else if (!columns.containsKey("gender") && header.contains("性别")) {
+                columns.put("gender", index);
+            } else if (!columns.containsKey("phone") && (header.contains("手机") || header.contains("电话"))) {
+                columns.put("phone", index);
+            } else if (!columns.containsKey("email") && (header.contains("邮箱") || header.contains("email"))) {
+                columns.put("email", index);
+            }
+        }
+        return columns;
     }
 
     private List<List<String>> readWorkbookRows(MultipartFile file, List<Map<String, Object>> assessItems) throws IOException {
@@ -4612,21 +5675,26 @@ public class InMemoryCoaService {
     private void persistGradeImportRows(
         long batchId,
         long courseId,
+        Long classId,
         long semesterId,
         long teacherId,
         List<GradeImportRow> rows
     ) {
         for (GradeImportRow row : rows) {
+            Long studentId = findStudentId(row.studentNo());
+            Long resolvedClassId = classId != null ? classId : findStudentClassId(row.studentNo());
             jdbcTemplate.update("""
                 INSERT INTO student_grade (
-                    course_id, assess_item_id, semester_id, import_batch_id, student_no, student_name,
+                    course_id, class_id, student_id, assess_item_id, semester_id, import_batch_id, student_no, student_name,
                     score, max_score, valid_flag, error_message, created_by
                 ) VALUES (
-                    :courseId, :assessItemId, :semesterId, :batchId, :studentNo, :studentName,
+                    :courseId, :classId, :studentId, :assessItemId, :semesterId, :batchId, :studentNo, :studentName,
                     :score, :maxScore, :validFlag, :errorMessage, :createdBy
                 )
                 """, new MapSqlParameterSource()
                 .addValue("courseId", courseId)
+                .addValue("classId", resolvedClassId)
+                .addValue("studentId", studentId)
                 .addValue("assessItemId", row.assessItemId())
                 .addValue("semesterId", semesterId)
                 .addValue("batchId", batchId)
@@ -4879,6 +5947,177 @@ public class InMemoryCoaService {
             "assessItems", assessItems,
             "warnings", warnings
         );
+    }
+
+    private Map<String, Object> buildAchievementSmartAnalysis(
+        List<Map<String, Object>> results,
+        Map<String, Object> dataSummary,
+        double overallAchievement,
+        double thresholdValue
+    ) {
+        double threshold = thresholdValue > 0D ? thresholdValue : 0.7D;
+        int totalObjectives = results.size();
+        long achievedCount = results.stream().filter(item -> booleanValue(item.get("isAchieved"))).count();
+        List<Map<String, Object>> assessItems = listOfMap(dataSummary.get("assessItems"));
+        List<String> warnings = listOfString(dataSummary.get("warnings"));
+
+        List<Map<String, Object>> weakObjectives = results.stream()
+            .filter(item -> !booleanValue(item.get("isAchieved")) || doubleValue(item.get("achieveValue")) < threshold)
+            .sorted(Comparator.comparingDouble(item -> doubleValue(item.get("achieveValue"))))
+            .limit(5)
+            .map(item -> {
+                double value = doubleValue(item.get("achieveValue"));
+                return map(
+                    "objectiveId", item.get("objectiveId"),
+                    "objCode", defaultString(item.get("objCode"), ""),
+                    "objContent", trimText(defaultString(item.get("objContent"), ""), 80),
+                    "achieveValue", round4(value),
+                    "gap", round4(Math.max(0D, threshold - value)),
+                    "level", achievementLevel(value)
+                );
+            })
+            .toList();
+
+        List<Map<String, Object>> weakAssessItems = assessItems.stream()
+            .filter(item -> longValue(item.get("confirmedRows")) == 0L || doubleValue(item.get("avgRate")) < 0.7D)
+            .sorted(Comparator
+                .comparingLong((Map<String, Object> item) -> longValue(item.get("confirmedRows")) == 0L ? 0L : 1L)
+                .thenComparingDouble(item -> doubleValue(item.get("avgRate"))))
+            .limit(5)
+            .map(item -> map(
+                "assessItemId", item.get("assessItemId"),
+                "itemName", defaultString(item.get("itemName"), ""),
+                "itemTypeName", defaultString(item.get("itemTypeName"), "其他"),
+                "avgRate", round4(doubleValue(item.get("avgRate"))),
+                "confirmedRows", longValue(item.get("confirmedRows")),
+                "pendingRows", longValue(item.get("pendingRows"))
+            ))
+            .toList();
+
+        String summary;
+        if (totalObjectives == 0) {
+            summary = "尚未形成课程目标达成度核算结果。请先完成课程目标、考核项、成绩导入与核算，系统将据此生成薄弱目标、薄弱考核项和改进建议。";
+        } else {
+            String tail = weakObjectives.isEmpty()
+                ? "所有已核算课程目标均达到当前阈值，后续可重点关注评价数据的持续积累与跨学期对比。"
+                : "其中" + weakObjectives.get(0).get("objCode") + "相对薄弱，建议优先复核相关教学内容、考核任务和过程反馈。";
+            summary = "本次核算覆盖" + totalObjectives + "个课程目标，" + achievedCount + "个达到阈值，课程整体达成度为"
+                + formatNumber(overallAchievement, 3) + "。" + tail;
+        }
+
+        List<String> highlights = new ArrayList<>();
+        if (totalObjectives > 0) {
+            highlights.add("课程目标达成率为" + achievedCount + "/" + totalObjectives + "，整体达成度"
+                + (overallAchievement >= threshold ? "达到" : "低于") + "设定阈值" + formatNumber(threshold, 2) + "。");
+        }
+        if (!weakObjectives.isEmpty()) {
+            Map<String, Object> weakest = weakObjectives.get(0);
+            highlights.add(weakest.get("objCode") + "最低，达成度为" + formatNumber(doubleValue(weakest.get("achieveValue")), 3)
+                + "，距离阈值差" + formatNumber(doubleValue(weakest.get("gap")), 3) + "。");
+        }
+        if (!weakAssessItems.isEmpty()) {
+            Map<String, Object> weakestItem = weakAssessItems.get(0);
+            String itemName = defaultString(weakestItem.get("itemName"), "未命名考核项");
+            long confirmedRows = longValue(weakestItem.get("confirmedRows"));
+            highlights.add(confirmedRows == 0L
+                ? itemName + "暂无已确认成绩，当前核算无法体现该考核项表现。"
+                : itemName + "平均得分率为" + formatNumber(doubleValue(weakestItem.get("avgRate")), 3) + "，是需要关注的考核环节。");
+        }
+        if (!warnings.isEmpty()) {
+            highlights.add(warnings.get(0));
+        }
+        if (highlights.isEmpty()) {
+            highlights.add("当前数据完整性较好，达成度结果可用于报告生成和持续改进跟踪。");
+        }
+
+        List<String> actions = new ArrayList<>();
+        if (longValue(dataSummary.get("pendingGradeRows")) > 0L) {
+            actions.add("先确认待写入成绩数据，避免未确认成绩影响核算口径。");
+        }
+        if (longValue(dataSummary.get("mappingCount")) == 0L && longValue(dataSummary.get("objectiveCount")) > 0L) {
+            actions.add("补充目标-考核项支撑矩阵，明确每个考核项对课程目标的贡献权重。");
+        }
+        if (!weakObjectives.isEmpty()) {
+            actions.add("围绕" + weakObjectives.get(0).get("objCode") + "梳理薄弱知识点，增加课堂练习、案例讲解和阶段反馈。");
+        }
+        if (!weakAssessItems.isEmpty()) {
+            actions.add("复核" + weakAssessItems.get(0).get("itemName") + "的任务难度、评分标准和训练覆盖度。");
+        }
+        if (actions.isEmpty()) {
+            actions.add("保持当前教学组织和考核结构，并在下一轮课程中继续积累对比数据。");
+            actions.add("结合学生明细定位个体差异，对临界学生开展针对性辅导。");
+        }
+
+        String riskLevel = "info";
+        if (totalObjectives > 0 && overallAchievement < threshold) {
+            riskLevel = "danger";
+        } else if (!weakObjectives.isEmpty() || !weakAssessItems.isEmpty() || !warnings.isEmpty()) {
+            riskLevel = "warning";
+        } else if (totalObjectives > 0) {
+            riskLevel = "success";
+        }
+
+        return map(
+            "summary", summary,
+            "riskLevel", riskLevel,
+            "thresholdValue", threshold,
+            "achievedCount", achievedCount,
+            "objectiveCount", totalObjectives,
+            "highlights", highlights,
+            "weakObjectives", weakObjectives,
+            "weakAssessItems", weakAssessItems,
+            "actions", actions
+        );
+    }
+
+    private Map<String, Object> buildAchievementChartData(List<Map<String, Object>> results, Map<String, Object> dataSummary) {
+        List<Map<String, Object>> assessItems = listOfMap(dataSummary.get("assessItems"));
+        return map(
+            "objectiveBars", results.stream()
+                .map(item -> map(
+                    "name", defaultString(item.get("objCode"), ""),
+                    "value", round4(doubleValue(item.get("achieveValue"))),
+                    "achieved", booleanValue(item.get("isAchieved"))
+                ))
+                .toList(),
+            "componentBars", buildDimensionData(results),
+            "assessRates", assessItems.stream()
+                .map(item -> map(
+                    "name", defaultString(item.get("itemName"), ""),
+                    "typeName", defaultString(item.get("itemTypeName"), "其他"),
+                    "value", round4(doubleValue(item.get("avgRate"))),
+                    "weight", doubleValue(item.get("weight"))
+                ))
+                .toList(),
+            "gradeCoverage", List.of(
+                map("name", "已确认成绩", "value", longValue(dataSummary.get("confirmedGradeRows"))),
+                map("name", "待确认成绩", "value", longValue(dataSummary.get("pendingGradeRows")))
+            )
+        );
+    }
+
+    private String achievementLevel(double value) {
+        if (value >= 0.9D) {
+            return "优秀";
+        }
+        if (value >= 0.8D) {
+            return "良好";
+        }
+        if (value >= 0.7D) {
+            return "中等";
+        }
+        if (value >= 0.6D) {
+            return "基本达成";
+        }
+        return "未达成";
+    }
+
+    private String trimText(String text, int maxLength) {
+        String normalized = defaultString(text, "").replaceAll("\\s+", "");
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, Math.max(0, maxLength)) + "…";
     }
 
     private List<Map<String, Object>> achievementAssessItemSummary(long outlineId, long courseId, long semesterId) {
@@ -5538,6 +6777,28 @@ public class InMemoryCoaService {
         int totalRows,
         int validRows,
         int errorRows
+    ) {
+    }
+
+    private record StudentImportRow(
+        int rowNumber,
+        String studentNo,
+        String studentName,
+        String gender,
+        Long classId,
+        Long majorId,
+        String phone,
+        String email,
+        boolean valid,
+        String errorMessage
+    ) {
+    }
+
+    private record StudentImportResult(
+        List<StudentImportRow> rows,
+        int validRows,
+        int errorRows,
+        List<String> errors
     ) {
     }
 }

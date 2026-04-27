@@ -20,6 +20,9 @@ DROP TABLE IF EXISTS `student_eval_dimension`;
 DROP TABLE IF EXISTS `student_eval`;
 DROP TABLE IF EXISTS `student_grade`;
 DROP TABLE IF EXISTS `grade_import_batch`;
+DROP TABLE IF EXISTS `class_course`;
+DROP TABLE IF EXISTS `base_student`;
+DROP TABLE IF EXISTS `base_class`;
 DROP TABLE IF EXISTS `parse_assess_item_draft`;
 DROP TABLE IF EXISTS `parse_objective_draft`;
 DROP TABLE IF EXISTS `parse_task`;
@@ -142,7 +145,7 @@ CREATE TABLE `base_course` (
   `course_name_en` VARCHAR(255) DEFAULT NULL COMMENT '课程英文名称',
   `credits` DECIMAL(3,1) DEFAULT NULL COMMENT '学分',
   `hours` INT DEFAULT NULL COMMENT '学时',
-  `course_type` VARCHAR(20) DEFAULT NULL COMMENT '课程类型：理论/实践/综合',
+  `course_type` VARCHAR(100) DEFAULT NULL COMMENT '课程类型：理论/实践/综合',
   `target_students` VARCHAR(255) DEFAULT NULL COMMENT '授课对象',
   `teaching_language` VARCHAR(100) DEFAULT NULL COMMENT '授课语言',
   `prerequisite_course` VARCHAR(255) DEFAULT NULL COMMENT '先修课程',
@@ -176,6 +179,61 @@ CREATE TABLE `course_teacher` (
   CONSTRAINT `fk_course_teacher_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_course_teacher_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='教师授课关系表';
+
+CREATE TABLE `base_class` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '班级ID',
+  `class_code` VARCHAR(50) NOT NULL COMMENT '班级编码',
+  `class_name` VARCHAR(100) NOT NULL COMMENT '班级名称',
+  `major_id` BIGINT DEFAULT NULL COMMENT '所属专业ID',
+  `grade_year` VARCHAR(20) DEFAULT NULL COMMENT '年级',
+  `student_count` INT NOT NULL DEFAULT 0 COMMENT '学生人数',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_base_class_code` (`class_code`),
+  KEY `idx_base_class_major` (`major_id`),
+  CONSTRAINT `fk_base_class_major` FOREIGN KEY (`major_id`) REFERENCES `base_major` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='班级表';
+
+CREATE TABLE `base_student` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '学生ID',
+  `student_no` VARCHAR(30) NOT NULL COMMENT '学号',
+  `student_name` VARCHAR(50) NOT NULL COMMENT '姓名',
+  `gender` VARCHAR(10) DEFAULT NULL COMMENT '性别',
+  `class_id` BIGINT DEFAULT NULL COMMENT '班级ID',
+  `major_id` BIGINT DEFAULT NULL COMMENT '专业ID',
+  `phone` VARCHAR(20) DEFAULT NULL COMMENT '手机号',
+  `email` VARCHAR(100) DEFAULT NULL COMMENT '邮箱',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1在读 0停用',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_base_student_no` (`student_no`),
+  KEY `idx_base_student_class` (`class_id`),
+  KEY `idx_base_student_major` (`major_id`),
+  CONSTRAINT `fk_base_student_class` FOREIGN KEY (`class_id`) REFERENCES `base_class` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_base_student_major` FOREIGN KEY (`major_id`) REFERENCES `base_major` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学生基础信息表';
+
+CREATE TABLE `class_course` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '班级课程ID',
+  `class_id` BIGINT NOT NULL COMMENT '班级ID',
+  `course_id` BIGINT NOT NULL COMMENT '课程ID',
+  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
+  `teacher_id` BIGINT DEFAULT NULL COMMENT '任课教师ID',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1有效 0停用',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_class_course_scope` (`class_id`, `course_id`, `semester_id`),
+  KEY `idx_class_course_course` (`course_id`, `semester_id`),
+  KEY `idx_class_course_teacher` (`teacher_id`),
+  CONSTRAINT `fk_class_course_class` FOREIGN KEY (`class_id`) REFERENCES `base_class` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_class_course_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_class_course_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`),
+  CONSTRAINT `fk_class_course_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='班级开课表';
 
 CREATE TABLE `outline_main` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '课程大纲ID',
@@ -302,6 +360,9 @@ CREATE TABLE `parse_task` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `finished_at` DATETIME DEFAULT NULL COMMENT '完成时间',
+  `parsed_course_json` TEXT DEFAULT NULL COMMENT '解析出的课程基础信息、教学内容和复核信息',
+  `parsed_mapping_json` TEXT DEFAULT NULL COMMENT '解析出的目标-考核项映射建议',
+  `obj_assess_matrix_json` TEXT DEFAULT NULL COMMENT '解析出的目标考核二维矩阵',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_parse_task_no` (`task_no`),
   KEY `idx_parse_task_scope` (`course_id`, `semester_id`, `teacher_id`),
@@ -364,6 +425,7 @@ CREATE TABLE `grade_import_batch` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '导入批次ID',
   `batch_no` VARCHAR(40) NOT NULL COMMENT '批次编号',
   `course_id` BIGINT NOT NULL COMMENT '课程ID',
+  `class_id` BIGINT DEFAULT NULL COMMENT '班级ID',
   `assess_item_id` BIGINT NOT NULL COMMENT '考核项ID',
   `teacher_id` BIGINT NOT NULL COMMENT '教师ID',
   `semester_id` BIGINT NOT NULL COMMENT '学期ID',
@@ -380,7 +442,9 @@ CREATE TABLE `grade_import_batch` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_grade_import_batch_no` (`batch_no`),
   KEY `idx_grade_import_scope` (`course_id`, `assess_item_id`, `semester_id`),
+  KEY `idx_grade_import_class` (`class_id`, `semester_id`),
   CONSTRAINT `fk_grade_import_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
+  CONSTRAINT `fk_grade_import_class` FOREIGN KEY (`class_id`) REFERENCES `base_class` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_grade_import_assess_item` FOREIGN KEY (`assess_item_id`) REFERENCES `assess_item` (`id`),
   CONSTRAINT `fk_grade_import_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`),
   CONSTRAINT `fk_grade_import_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
@@ -389,6 +453,8 @@ CREATE TABLE `grade_import_batch` (
 CREATE TABLE `student_grade` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '成绩记录ID',
   `course_id` BIGINT NOT NULL COMMENT '课程ID',
+  `class_id` BIGINT DEFAULT NULL COMMENT '班级ID',
+  `student_id` BIGINT DEFAULT NULL COMMENT '学生ID',
   `assess_item_id` BIGINT NOT NULL COMMENT '考核项ID',
   `semester_id` BIGINT NOT NULL COMMENT '学期ID',
   `import_batch_id` BIGINT DEFAULT NULL COMMENT '导入批次ID',
@@ -404,8 +470,11 @@ CREATE TABLE `student_grade` (
   PRIMARY KEY (`id`),
   KEY `idx_student_grade_scope` (`course_id`, `assess_item_id`, `semester_id`),
   KEY `idx_student_grade_student` (`student_no`),
+  KEY `idx_student_grade_class` (`class_id`, `semester_id`),
   KEY `idx_student_grade_batch` (`import_batch_id`),
   CONSTRAINT `fk_student_grade_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
+  CONSTRAINT `fk_student_grade_class` FOREIGN KEY (`class_id`) REFERENCES `base_class` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_student_grade_student` FOREIGN KEY (`student_id`) REFERENCES `base_student` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_student_grade_assess_item` FOREIGN KEY (`assess_item_id`) REFERENCES `assess_item` (`id`),
   CONSTRAINT `fk_student_grade_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`),
   CONSTRAINT `fk_student_grade_batch` FOREIGN KEY (`import_batch_id`) REFERENCES `grade_import_batch` (`id`) ON DELETE SET NULL,
@@ -674,6 +743,15 @@ INSERT INTO `course_teacher` (`id`, `course_id`, `teacher_id`, `semester_id`, `s
   (3006, 2001, 1201, 2, 1),
   (3007, 2002, 1202, 2, 1),
   (3008, 2004, 1203, 3, 1);
+
+INSERT INTO `base_class` (`id`, `class_code`, `class_name`, `major_id`, `grade_year`, `student_count`) VALUES
+  (4001, 'CS2023-01', '计算机科学与技术2023级1班', 1, '2023', 0),
+  (4002, 'SE2023-01', '软件工程2023级1班', 2, '2023', 0);
+
+INSERT INTO `class_course` (`id`, `class_id`, `course_id`, `semester_id`, `teacher_id`, `status`) VALUES
+  (4101, 4001, 2001, 1, 1201, 1),
+  (4102, 4001, 2002, 1, 1201, 1),
+  (4103, 4002, 2004, 1, 1203, 1);
 
 INSERT INTO `calc_rule` (`id`, `rule_name`, `calc_method`, `threshold_value`, `pass_threshold`, `config_json`, `is_default`, `status`) VALUES
   (1, '默认加权平均核算规则', 'weighted_avg', 0.7000, 0.6000, JSON_OBJECT('description', '按考核项贡献权重汇总教学目标达成度'), 1, 1);

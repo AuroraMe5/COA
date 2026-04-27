@@ -150,6 +150,7 @@ public class OutlineParseEngine {
         List<ObjectiveDraftSuggestion> objectives = buildObjectiveSuggestions(objectiveCandidates);
 
         List<AssessCandidate> assessCandidates = extractAssessCandidates(segments);
+        mergeAssessCandidatesFromMatrix(assessCandidates, objAssessMatrix);
         alignAssessCandidatesWithMatrixNames(assessCandidates, objAssessMatrix);
         completeAssessTypes(assessCandidates);
         normalizeAssessWeights(assessCandidates);
@@ -323,7 +324,7 @@ public class OutlineParseEngine {
         CourseInfo base,
         List<TeachingContentInfo> teachingContents,
         List<AssessmentDetail> assessmentDetails,
-        List<String> assessmentStandards,
+        List<AssessmentStandard> assessmentStandards,
         AssessmentPolicy assessmentPolicy
     ) {
         return new CourseInfo(
@@ -535,14 +536,17 @@ public class OutlineParseEngine {
         return result;
     }
 
-    private List<String> extractAssessmentStandards(List<SourceSegment> segments) {
+    private List<AssessmentStandard> extractAssessmentStandards(List<SourceSegment> segments) {
         List<LineEntry> lines = flattenLines(segments);
-        List<String> result = new ArrayList<>();
+        List<AssessmentStandard> result = new ArrayList<>();
+        List<String> fallback = new ArrayList<>();
         boolean inStandardSection = false;
+        String currentMethod = "";
         for (LineEntry line : lines) {
             String text = line.text();
             if (containsAny(text, List.of("考核与评价标准", "评价标准表", "评分标准表"))) {
                 inStandardSection = true;
+                currentMethod = defaultIfBlank(extractAssessmentMethodFromStandardTitle(text), currentMethod);
             }
             if (!inStandardSection) {
                 continue;
@@ -550,14 +554,108 @@ public class OutlineParseEngine {
             if (looksLikeHeading(text, List.of("教材", "参考书", "课程资源", "大纲制定"))) {
                 break;
             }
-            if (containsAny(text, List.of("评价标准", "优秀", "良好", "中等", "合格", "不合格", "课程目标"))) {
-                result.add(text);
+
+            String methodFromTitle = extractAssessmentMethodFromStandardTitle(text);
+            if (StringUtils.hasText(methodFromTitle)) {
+                currentMethod = methodFromTitle;
             }
-            if (result.size() >= 24) {
+
+            AssessmentStandard row = parseAssessmentStandardRow(line.cells(), text, currentMethod);
+            if (row != null) {
+                if (StringUtils.hasText(row.assessmentMethod())) {
+                    currentMethod = row.assessmentMethod();
+                }
+                result.add(row);
+            } else if (containsAny(text, List.of("评价标准", "优秀", "良好", "中等", "合格", "不合格", "课程目标"))) {
+                fallback.add(text);
+            }
+            if (result.size() >= 60) {
                 break;
             }
         }
+        if (result.isEmpty()) {
+            for (int index = 0; index < Math.min(fallback.size(), 24); index++) {
+                String text = fallback.get(index);
+                result.add(new AssessmentStandard("", "", text, "", "", "", "", "", text));
+            }
+        }
         return result;
+    }
+
+    private AssessmentStandard parseAssessmentStandardRow(List<String> cells, String text, String currentMethod) {
+        if (cells.size() < 6 || containsAny(text, List.of("评价标准", "优秀", "良好", "中等", "不合格")) && !containsAny(text, List.of("按时", "不按时", "正确", "清楚", "规范", "作业", "报告", "设计"))) {
+            return null;
+        }
+
+        int objectiveIndex = -1;
+        for (int index = 0; index < cells.size(); index++) {
+            if (looksLikeStandardObjectiveCell(cells.get(index))) {
+                objectiveIndex = index;
+                break;
+            }
+        }
+        if (objectiveIndex < 0) {
+            return null;
+        }
+
+        String method = objectiveIndex > 0 ? sanitizeText(cells.get(objectiveIndex - 1)) : defaultIfBlank(currentMethod, "");
+        String objective = sanitizeText(cells.get(objectiveIndex));
+        int gradeStart = objectiveIndex + 1;
+        if (cells.size() - gradeStart < 5) {
+            return null;
+        }
+
+        String excellent = cellOrBlank(cells, gradeStart);
+        String good = cellOrBlank(cells, gradeStart + 1);
+        String medium = cellOrBlank(cells, gradeStart + 2);
+        String pass = cellOrBlank(cells, gradeStart + 3);
+        String fail = cellOrBlank(cells, gradeStart + 4);
+        String scorePercent = cells.size() > gradeStart + 5 ? sanitizeScorePercent(cells.get(cells.size() - 1)) : "";
+        if (!StringUtils.hasText(scorePercent) && cells.size() > gradeStart + 5) {
+            scorePercent = sanitizeText(cells.get(gradeStart + 5));
+        }
+        if (!StringUtils.hasText(excellent) || !StringUtils.hasText(good) || !StringUtils.hasText(fail)) {
+            return null;
+        }
+        return new AssessmentStandard(
+            method,
+            objective,
+            excellent,
+            good,
+            medium,
+            pass,
+            fail,
+            scorePercent,
+            text
+        );
+    }
+
+    private boolean looksLikeStandardObjectiveCell(String text) {
+        String normalized = normalizeForMatch(text);
+        return normalized.matches(".*课程目标\\s*\\d+.*")
+            || normalized.matches(".*目标\\s*\\d+.*")
+            || normalized.matches("obj[-_]?\\d+");
+    }
+
+    private String extractAssessmentMethodFromStandardTitle(String text) {
+        String normalized = sanitizeText(text);
+        if (!containsAny(normalized, List.of("评价标准表", "评分标准表"))) {
+            return "";
+        }
+        normalized = normalized.replaceAll("^表\\s*\\d+\\s*", "").trim();
+        normalized = normalized.replaceAll("[\\s　]*评价标准表.*$", "").trim();
+        normalized = normalized.replaceAll("[\\s　]*评分标准表.*$", "").trim();
+        normalized = normalized.replaceAll("^[：:、，,.\\-]+", "").trim();
+        return normalized.length() <= 20 ? normalized : "";
+    }
+
+    private String cellOrBlank(List<String> cells, int index) {
+        return index >= 0 && index < cells.size() ? sanitizeText(cells.get(index)) : "";
+    }
+
+    private String sanitizeScorePercent(String text) {
+        Matcher matcher = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*[%％]?").matcher(defaultIfBlank(text, ""));
+        return matcher.find() ? matcher.group(1) : sanitizeText(text);
     }
 
     private AssessmentPolicy extractAssessmentPolicy(List<SourceSegment> segments) {
@@ -1768,6 +1866,9 @@ public class OutlineParseEngine {
 
     private boolean isMappingTableHeader(String line) {
         String nm = normalizeForMatch(line);
+        if (containsAny(nm, List.of("评价标准", "评分标准", "优秀", "良好", "中等", "合格", "不合格"))) {
+            return false;
+        }
         return nm.contains("课程目标")
             && nm.contains("考核方式")
             && (nm.contains("成绩比例") || nm.contains("成绩评定") || nm.contains("支撑毕业要求")
@@ -2113,6 +2214,39 @@ public class OutlineParseEngine {
                     break;
                 }
             }
+        }
+    }
+
+    private void mergeAssessCandidatesFromMatrix(List<AssessCandidate> candidates, ObjAssessMatrix matrix) {
+        if (matrix == null || matrix.methodNames().isEmpty()) {
+            return;
+        }
+        for (int index = 0; index < matrix.methodNames().size(); index++) {
+            String methodName = matrix.methodNames().get(index);
+            String methodType = index < matrix.methodTypes().size() ? matrix.methodTypes().get(index) : assessTypeForHeader(methodName);
+            if (!StringUtils.hasText(methodName) || !StringUtils.hasText(methodType)) {
+                continue;
+            }
+            boolean exists = candidates.stream().anyMatch(candidate -> methodType.equals(candidate.type));
+            if (exists) {
+                continue;
+            }
+            double weight = 0D;
+            for (ObjAssessMatrixRow row : matrix.rows()) {
+                if (index < row.proportions().size()) {
+                    weight += row.proportions().get(index);
+                }
+            }
+            if (weight <= 0D) {
+                continue;
+            }
+            candidates.add(new AssessCandidate(
+                methodName,
+                methodType,
+                round2(weight),
+                0.93D,
+                "目标考核映射表：" + methodName + " " + round2(weight) + "%"
+            ));
         }
     }
 
@@ -2524,7 +2658,7 @@ public class OutlineParseEngine {
         String courseOwner,
         List<TeachingContentInfo> teachingContents,
         List<AssessmentDetail> assessmentDetails,
-        List<String> assessmentStandards,
+        List<AssessmentStandard> assessmentStandards,
         AssessmentPolicy assessmentPolicy
     ) {
         public CourseInfo(
@@ -2577,6 +2711,19 @@ public class OutlineParseEngine {
         String content,
         String evaluationMethod,
         String supports,
+        String originalText
+    ) {
+    }
+
+    public record AssessmentStandard(
+        String assessmentMethod,
+        String objective,
+        String excellent,
+        String good,
+        String medium,
+        String pass,
+        String fail,
+        String scorePercent,
         String originalText
     ) {
     }

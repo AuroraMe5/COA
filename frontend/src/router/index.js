@@ -9,6 +9,7 @@ import ParseImport from '@/views/objectives/ParseImport.vue'
 import OutlineManage from '@/views/objectives/OutlineManage.vue'
 import ObjectiveWeights from '@/views/objectives/ObjectiveWeights.vue'
 import ObjectiveMapping from '@/views/objectives/ObjectiveMapping.vue'
+import ClassCollectView from '@/views/collect/ClassCollectView.vue'
 import GradeImportView from '@/views/collect/GradeImportView.vue'
 import GradeManageView from '@/views/collect/GradeManageView.vue'
 import AchievementCalculation from '@/views/analysis/AchievementCalculation.vue'
@@ -75,10 +76,16 @@ const routes = [
         meta: { title: '目标考核映射' }
       },
       {
+        path: 'collect/classes',
+        name: 'class-collect',
+        component: ClassCollectView,
+        meta: { title: '班级与学生管理' }
+      },
+      {
         path: 'collect/grades',
         name: 'grade-import',
         component: GradeImportView,
-        meta: { title: '数据采集' }
+        meta: { title: '成绩批量导入' }
       },
       {
         path: 'collect/grades/manage',

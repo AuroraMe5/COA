@@ -2,7 +2,7 @@
   <div class="empty-state">
     <div class="empty-mark">{{ mark }}</div>
     <h3>{{ title }}</h3>
-    <p>{{ description }}</p>
+    <p v-if="description">{{ description }}</p>
   </div>
 </template>
 
@@ -18,7 +18,7 @@ defineProps({
   },
   description: {
     type: String,
-    required: true
+    default: ''
   }
 })
 </script>

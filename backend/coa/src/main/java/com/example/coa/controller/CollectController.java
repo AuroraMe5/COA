@@ -29,10 +29,69 @@ public class CollectController {
     public Map<String, Object> uploadGradeFile(
         @RequestParam(required = false) MultipartFile file,
         @RequestParam Long courseId,
+        @RequestParam(required = false) Long classId,
         @RequestParam(required = false) Long assessItemId,
         @RequestParam String semester
     ) {
-        return gradeService.uploadGradeFile(courseId, assessItemId, semester, file);
+        return gradeService.uploadGradeFile(courseId, classId, assessItemId, semester, file);
+    }
+
+    @GetMapping("/classes")
+    public Map<String, Object> getClasses(@RequestParam(required = false) String keyword) {
+        return gradeService.getClasses(keyword);
+    }
+
+    @PostMapping("/classes")
+    public Map<String, Object> createClass(@RequestBody Map<String, Object> payload) {
+        return gradeService.saveClass(null, payload);
+    }
+
+    @PutMapping("/classes/{id}")
+    public Map<String, Object> updateClass(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        return gradeService.saveClass(id, payload);
+    }
+
+    @GetMapping("/classes/{id}/students")
+    public Map<String, Object> getClassStudents(@PathVariable Long id, @RequestParam(required = false) String keyword) {
+        return gradeService.getClassStudents(id, keyword);
+    }
+
+    @PostMapping("/classes/{id}/students/upload")
+    public Map<String, Object> uploadStudents(@PathVariable Long id, @RequestParam(required = false) MultipartFile file) {
+        return gradeService.uploadStudents(id, file);
+    }
+
+    @PostMapping("/students")
+    public Map<String, Object> createStudent(@RequestBody Map<String, Object> payload) {
+        return gradeService.saveStudent(null, payload);
+    }
+
+    @PutMapping("/students/{id}")
+    public Map<String, Object> updateStudent(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        return gradeService.saveStudent(id, payload);
+    }
+
+    @DeleteMapping("/students/{id}")
+    public Map<String, Object> deleteStudent(@PathVariable Long id) {
+        return gradeService.deleteStudent(id);
+    }
+
+    @GetMapping("/class-courses")
+    public Map<String, Object> getClassCourses(
+        @RequestParam(required = false) Long classId,
+        @RequestParam(required = false) String semester
+    ) {
+        return gradeService.getClassCourses(classId, semester);
+    }
+
+    @PostMapping("/class-courses")
+    public Map<String, Object> saveClassCourse(@RequestBody Map<String, Object> payload) {
+        return gradeService.saveClassCourse(payload);
+    }
+
+    @DeleteMapping("/class-courses/{id}")
+    public Map<String, Object> deleteClassCourse(@PathVariable Long id) {
+        return gradeService.deleteClassCourse(id);
     }
 
     @GetMapping("/grades/batches/{batchId}/preview")
@@ -53,6 +112,7 @@ public class CollectController {
     @GetMapping("/grades")
     public Map<String, Object> getImportedGrades(
         @RequestParam(required = false) String courseId,
+        @RequestParam(required = false) String classId,
         @RequestParam(required = false) String assessItemId,
         @RequestParam(required = false) String semester,
         @RequestParam(required = false) String keyword,
@@ -61,6 +121,7 @@ public class CollectController {
     ) {
         return gradeService.getImportedGrades(Map.of(
             "courseId", courseId == null ? "" : courseId,
+            "classId", classId == null ? "" : classId,
             "assessItemId", assessItemId == null ? "" : assessItemId,
             "semester", semester == null ? "" : semester,
             "keyword", keyword == null ? "" : keyword,

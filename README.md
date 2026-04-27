@@ -78,12 +78,15 @@ SOURCE D:/COA/init.sql;
 
 - 基础数据：`base_college`、`base_major`、`base_semester`、`base_course`
 - 用户与登录：`sys_user`、`sys_role`、`sys_user_role`、`sys_login_session`
-- 大纲与目标：`outline_main`、`teach_objective`、`obj_decompose`
+- 班级与学生：`base_class`、`base_student`、`class_course`
+- 大纲与目标：`outline_main`、`course_teaching_content`、`teach_objective`、`obj_decompose`
 - 考核配置：`assess_item`、`obj_assess_map`
 - 智能解析：`parse_task`、`parse_objective_draft`、`parse_assess_item_draft`
 - 成绩采集：`grade_import_batch`、`student_grade`
 - 达成核算：`calc_rule`、`achieve_result`、`achieve_result_detail`
-- 报告支撑：`intelligent_suggestion` 可作为报告改进建议的历史参考数据
+- 评价与改进：`student_eval`、`student_eval_dimension`、`teacher_reflection`、`supervisor_eval`、`suggestion_rule`、`intelligent_suggestion`、`improve_suggestion`、`improve_measure`
+
+当前 `init.sql` 是标准初始化结构。后端启动时仍保留轻量兼容迁移逻辑，用于给旧库补齐 `parse_task` 解析 JSON 字段、班级/学生采集字段、教学内容表、毕业要求字段和智能建议来源字段；新库直接执行 `init.sql` 即可得到完整表结构。
 
 ### 2. 配置后端数据库连接
 
@@ -169,6 +172,8 @@ npm run build
    - 教师确认后写入正式课程、目标、考核项和映射表。
 
 4. 数据采集
+   - 创建班级并导入学生信息。
+   - 将班级与课程、学期、任课教师建立关系。
    - 成绩批量导入 xls、xlsx、csv 文件。
    - 系统会在多工作表 Excel 中自动识别成绩表，并按课程考核项匹配成绩列。
    - 预览校验后确认导入有效成绩。
@@ -198,12 +203,13 @@ frontend/src/router/index.js
 ```text
 /login                         登录页
 /dashboard                     首页概览
-/objectives/outlines           课程大纲管理
+/objectives/outlines           课程管理
 /objectives/list               教学目标列表
 /objectives/edit/:id?          教学目标编辑
 /objectives/weights            目标权重管理
 /objectives/parse-import       智能解析导入
 /objectives/mapping            目标考核映射
+/collect/classes               班级与学生管理
 /collect/grades                成绩批量导入
 /collect/grades/manage         学生成绩管理
 /analysis/calculation          达成度核算与报告导出
@@ -253,7 +259,7 @@ frontend/src/components/layout/AppHeader.vue
 - `ChartPanel.vue`：图表容器
 - `EmptyState.vue`：空状态
 
-### 教学目标管理页面
+### 课程与目标管理页面
 
 相关页面：
 
@@ -269,8 +275,10 @@ frontend/src/views/objectives/ParseImport.vue
 主要逻辑：
 
 - `OutlineManage.vue`
-  - 查询课程大纲。
-  - 新增或编辑大纲版本。
+  - 作为“课程管理”入口，按课程和学期查看课程详情。
+  - 维护课程基础信息和课程简介。
+  - 查看结构化教学内容表。
+  - 通过弹窗维护教学目标、目标分解与权重、目标考核映射和教学内容。
   - 发布大纲时触发后端校验。
 
 - `ObjectiveList.vue`
@@ -303,9 +311,22 @@ frontend/src/views/objectives/ParseImport.vue
 相关页面：
 
 ```text
+frontend/src/views/collect/ClassCollectView.vue
 frontend/src/views/collect/GradeImportView.vue
 frontend/src/views/collect/GradeManageView.vue
 ```
+
+#### 班级与学生管理
+
+页面：`ClassCollectView.vue`
+
+主要功能：
+
+- 创建和编辑班级基础信息，写入 `base_class`。
+- 为班级导入学生名单，写入 `base_student`。
+- 支持手动新增、编辑、停用学生信息。
+- 将班级与课程、学期、任课教师建立开课关系，写入 `class_course`。
+- 成绩导入时可选择班级，导入批次和成绩记录会落到 `grade_import_batch.class_id`、`student_grade.class_id`、`student_grade.student_id`。
 
 #### 成绩批量导入
 
@@ -319,7 +340,7 @@ frontend/src/views/collect/GradeManageView.vue
 
 前端流程：
 
-1. 选择课程和学期。
+1. 选择课程、学期和班级。
 2. 根据课程与学期展示当前考核项。
 3. 上传成绩文件。
 4. 调用后端 `/collect/grades/upload`。
@@ -348,6 +369,17 @@ frontend/src/views/collect/GradeManageView.vue
 
 后端对应：
 
+- `GET /api/v1/collect/classes`
+- `POST /api/v1/collect/classes`
+- `PUT /api/v1/collect/classes/{id}`
+- `GET /api/v1/collect/classes/{id}/students`
+- `POST /api/v1/collect/classes/{id}/students/upload`
+- `POST /api/v1/collect/students`
+- `PUT /api/v1/collect/students/{id}`
+- `DELETE /api/v1/collect/students/{id}`
+- `GET /api/v1/collect/class-courses`
+- `POST /api/v1/collect/class-courses`
+- `DELETE /api/v1/collect/class-courses/{id}`
 - `GET /api/v1/collect/grades`
 - `POST /api/v1/collect/grades/rows`
 - `DELETE /api/v1/collect/grades/rows`
@@ -372,6 +404,8 @@ frontend/src/views/analysis/AchievementCalculation.vue
 - 运行核算。
 - 查看每个目标的达成度、是否达成、成绩项贡献明细。
 - 查看成绩数据覆盖情况。
+- 查看智能分析结论，包括整体风险、关键发现、薄弱目标、薄弱考核项和改进动作。
+- 查看课程目标达成度、考核项平均得分率、考核维度贡献和成绩确认情况图表。
 - 下载课程目标达成情况评价及总结报告。
 
 ## 后端架构与接口逻辑
@@ -396,11 +430,11 @@ backend/coa/src/main/java/com/example/coa/CoaApplication.java
 AuthController              登录、登出、当前用户
 CatalogController           课程、学期、考核项目录
 DashboardController         首页概览
-OutlineController           课程大纲 CRUD 与发布
+OutlineController           课程管理、大纲 CRUD 与发布
 ObjectiveController         教学目标 CRUD、批量权重
 MappingController           目标考核映射
 ParseController             智能解析任务、草稿复核、确认写入
-CollectController           成绩上传、预览、确认导入与成绩维护
+CollectController           班级、学生、班级开课、成绩上传、预览、确认导入与成绩维护
 AchievementController       达成度查询与核算任务
 ReportController            达成度报告预览与 Word 导出
 ```
@@ -468,6 +502,17 @@ POST   /api/v1/parse/tasks/{taskId}/confirm
 #### 成绩采集
 
 ```text
+GET    /api/v1/collect/classes
+POST   /api/v1/collect/classes
+PUT    /api/v1/collect/classes/{id}
+GET    /api/v1/collect/classes/{id}/students
+POST   /api/v1/collect/classes/{id}/students/upload
+POST   /api/v1/collect/students
+PUT    /api/v1/collect/students/{id}
+DELETE /api/v1/collect/students/{id}
+GET    /api/v1/collect/class-courses
+POST   /api/v1/collect/class-courses
+DELETE /api/v1/collect/class-courses/{id}
 POST   /api/v1/collect/grades/upload
 GET    /api/v1/collect/grades/batches/{batchId}/preview
 PUT    /api/v1/collect/grades/batches/{batchId}/preview-rows
@@ -516,6 +561,7 @@ PUT   /api/v1/improve/measures/{id}/effect
 
 ```text
 base_course 1 --- n outline_main
+base_course + base_semester 1 --- n course_teaching_content
 outline_main 1 --- n teach_objective
 teach_objective 1 --- n obj_decompose
 outline_main 1 --- n assess_item
@@ -525,6 +571,7 @@ teach_objective n --- n assess_item，通过 obj_assess_map 连接
 含义：
 
 - 一门课程可以有多个学期或多个版本的大纲。
+- 教学内容表按课程和学期存储，来源可以是智能解析或人工维护。
 - 一个大纲下有多个教学目标。
 - 一个教学目标可以拆分为多个分解点。
 - 一个大纲下有多个考核项。
@@ -546,12 +593,30 @@ parse_task.obj_assess_matrix_json
 - 解析出的目标先进入目标草稿表。
 - 解析出的考核项先进入考核项草稿表。
 - 课程基本信息、映射建议、映射矩阵以 JSON 存在 `parse_task` 中。
+- 教学内容解析结果最终会落到 `course_teaching_content`，不再只停留在 JSON 中。
 - 教师复核后再写入正式表。
+
+### 班级与学生
+
+```text
+base_major 1 --- n base_class
+base_class 1 --- n base_student
+base_class n --- n base_course，通过 class_course 连接并区分 semester
+```
+
+含义：
+
+- 班级基础信息存储在 `base_class`。
+- 学生基础信息存储在 `base_student`，可按班级导入或手动维护。
+- `class_course` 表示某个班级在某个学期修读某门课程，并可关联任课教师。
 
 ### 成绩采集
 
 ```text
 grade_import_batch 1 --- n student_grade
+grade_import_batch n --- 1 base_class
+student_grade n --- 1 base_student
+student_grade n --- 1 base_class
 student_grade n --- 1 assess_item
 student_grade n --- 1 base_course
 student_grade n --- 1 base_semester
@@ -561,6 +626,7 @@ student_grade n --- 1 base_semester
 
 - 每次上传成绩文件生成一个导入批次。
 - 每个学生的每个考核项成绩是一条 `student_grade`。
+- 成绩批次和成绩明细可以关联到班级与学生基础信息，便于后续按班级分析。
 - 只有 `grade_import_batch.status = 'CONFIRMED'` 且 `student_grade.valid_flag = 1` 的成绩参与达成度核算。
 
 ### 达成度核算
@@ -1007,7 +1073,9 @@ POST /api/v1/parse/upload
 - 考核项类型
 - 考核项权重
 - 考核项状态
+- 教学内容、涉及目标、基本要求和教学方式
 - 目标考核映射矩阵
+- 各板块整体确认状态和选择性覆盖项
 
 如果目标权重来自平均默认值，删除目标后会重新平均分配权重。
 
@@ -1032,7 +1100,8 @@ POST /api/v1/parse/tasks/{taskId}/confirm
 7. 为每个目标生成默认分解点写入 `obj_decompose`。
 8. 将考核项写入 `assess_item`。
 9. 将映射矩阵或映射建议写入 `obj_assess_map`。
-10. 将 `parse_task.status` 更新为 `CONFIRMED`。
+10. 将教学内容表写入 `course_teaching_content`。
+11. 将 `parse_task.status` 更新为 `CONFIRMED`，并在 `parsed_course_json` 中保留复核确认和覆盖选择。
 
 ## 成绩导入与成绩管理算法
 
@@ -1271,6 +1340,26 @@ achieve_result_detail
 - 贡献权重
 - 对目标达成值的贡献
 
+### 页面智能分析与图表
+
+达成度页面在返回核算结果时同步生成 `smartAnalysis` 与 `chartData`。
+
+`smartAnalysis` 包括：
+
+- 整体结论和风险等级。
+- 已达成目标数和目标总数。
+- 关键发现。
+- 薄弱课程目标。
+- 薄弱考核项。
+- 建议改进动作。
+
+`chartData` 包括：
+
+- `objectiveBars`：课程目标达成度柱状图数据。
+- `assessRates`：考核项平均得分率图表数据。
+- `componentBars`：平时、期中、期末等维度贡献数据。
+- `gradeCoverage`：已确认和待确认成绩记录分布。
+
 ### 达成度报告生成
 
 核算完成后，`ReportController` 通过 `ReportDataAssembler` 汇总大纲、目标、考核项、成绩和达成度结果，再由 `ReportWordBuilder` 生成 Word 文档。
@@ -1360,19 +1449,20 @@ student_grade.valid_flag = 1
 推荐演示顺序：
 
 1. 登录系统，进入首页概览。
-2. 打开课程大纲管理，展示课程和学期维度。
+2. 打开课程管理，展示课程详情、课程简介、教学内容表和弹窗式目标维护。
 3. 进入智能解析导入，上传课程大纲文件。
 4. 展示解析出的课程信息、课程目标、考核项、目标考核映射。
 5. 修改一条目标权重，说明映射总比例会跟随目标权重联动。
 6. 确认写入正式数据。
-7. 打开目标考核映射页面，展示正式映射矩阵。
-8. 进入成绩批量导入，上传成绩表。
-9. 展示横向预览、异常提示和手动修正。
-10. 确认导入成绩。
-11. 打开学生成绩管理，展示按学生横向成绩表和增删改查能力。
-12. 进入达成度核算，设置阈值并运行核算。
-13. 展示每个目标达成度和考核项贡献明细。
-14. 下载达成度报告，检查成绩统计、课程目标达成情况、考核合理性和改进举措。
+7. 在课程管理弹窗中展示正式目标、权重和目标考核映射矩阵。
+8. 进入班级与学生管理，创建班级、导入学生，并绑定班级课程。
+9. 进入成绩批量导入，选择班级并上传成绩表。
+10. 展示横向预览、异常提示和手动修正。
+11. 确认导入成绩。
+12. 打开学生成绩管理，展示按学生横向成绩表和增删改查能力。
+13. 进入达成度核算，设置阈值并运行核算。
+14. 展示每个目标达成度、考核项贡献明细、智能分析和图表看板。
+15. 下载达成度报告，检查成绩统计、课程目标达成情况、考核合理性和改进举措。
 
 ## 常见问题说明
 
@@ -1399,7 +1489,7 @@ student_grade.valid_flag = 1
 ## 当前已实现重点
 
 - 用户登录与会话校验。
-- 课程大纲管理。
+- 课程管理。
 - 教学目标管理。
 - 目标权重批量维护。
 - 目标考核映射维护。
@@ -1410,10 +1500,13 @@ student_grade.valid_flag = 1
 - 目标考核映射表解析。
 - 解析草稿复核。
 - 解析结果确认写入。
+- 班级创建、学生信息导入与学生信息维护。
+- 班级课程绑定。
 - xls、xlsx、csv 成绩批量导入。
 - 成绩预览校验与行级修正。
 - 学生成绩管理增删改查。
 - 达成度核算。
+- 达成度智能分析与图表看板。
 - 达成度报告 Word 导出（含智能文字分析）。
 
 ## 报告导出

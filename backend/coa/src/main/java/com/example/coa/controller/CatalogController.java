@@ -49,6 +49,15 @@ public class CatalogController {
         return coaService.updateCourseTeachingContents(id, semester, payload);
     }
 
+    @PutMapping("/courses/{id}/assess-items")
+    public Map<String, Object> updateCourseAssessItems(
+        @PathVariable Long id,
+        @RequestParam String semester,
+        @RequestBody Map<String, Object> payload
+    ) {
+        return coaService.updateCourseAssessItems(id, semester, payload);
+    }
+
     @GetMapping("/semesters")
     public Object getSemesters() {
         return coaService.getSemesters();

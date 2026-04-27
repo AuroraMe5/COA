@@ -1,9 +1,6 @@
 <template>
   <div class="app-page page-stack">
-    <ModuleHeader
-      title="课程管理"
-      description="集中查看课程详情，维护课程基础信息，并汇总课程目标、毕业要求、考核构成与智能解析结果。"
-    >
+    <ModuleHeader title="课程管理">
       <template #actions>
         <button class="btn btn-light" @click="goTo('/objectives/parse-import')">智能解析导入</button>
       </template>
@@ -59,7 +56,6 @@
       <div class="summary-card">
         <span>目标考核映射</span>
         <strong>{{ detail.summary.mappingRowCount || 0 }}</strong>
-        <small>可跳转到专门页面维护</small>
       </div>
       <div class="summary-card">
         <span>解析教学内容</span>
@@ -69,7 +65,7 @@
     </div>
 
     <div class="grid-2">
-      <PanelCard title="课程基础信息" subtitle="这些字段没有单独维护页面，可在这里直接修改并保存。">
+      <PanelCard title="课程基础信息">
         <div class="course-context">
           <div>
             <span>开课学期</span>
@@ -136,7 +132,7 @@
         </div>
       </PanelCard>
 
-      <PanelCard title="课程简介" subtitle="可在这里手动维护当前课程在所选学期使用的课程简介。">
+      <PanelCard title="课程简介">
         <div class="form-field mt-0">
           <label>课程简介</label>
           <textarea v-model.trim="outlineForm.overview" class="text-area intro-area"></textarea>
@@ -150,7 +146,7 @@
       </PanelCard>
     </div>
 
-    <PanelCard title="课程目标与毕业要求" subtitle="目标本身、权重和分解点有专门页面维护，这里用于查看当前课程配置。">
+    <PanelCard title="课程目标与毕业要求">
       <template #actions>
         <button class="btn btn-light" @click="openObjectiveDialog('list')">目标列表</button>
         <button class="btn btn-light" @click="openObjectiveDialog('weights')">目标分解与权重</button>
@@ -187,12 +183,12 @@
         v-else
         mark="目标"
         title="当前课程暂无课程目标"
-        description="可通过智能解析导入或目标列表页面补充课程目标。"
       />
     </PanelCard>
 
-    <PanelCard title="考核组成与目标映射" subtitle="成绩组成和目标考核映射是达成度计算的基础，可跳转到专门页面维护。">
+    <PanelCard title="考核组成与目标映射">
       <template #actions>
+        <button class="btn btn-light" @click="openAssessDialog">考核项修改</button>
         <button class="btn btn-light" @click="openObjectiveDialog('mapping')">目标考核映射</button>
       </template>
 
@@ -245,36 +241,52 @@
       </div>
     </PanelCard>
 
-    <PanelCard
-      title="教学内容表"
-      subtitle="维护课程教学内容、学时、教学方式、涉及目标和基本要求。点击进入窗口后可筛选、滚动浏览和编辑。"
-    >
+    <PanelCard title="教学内容表">
       <template #actions>
         <button class="btn btn-primary" @click="openTeachingDialog">维护教学内容表</button>
       </template>
 
-      <div class="teaching-summary">
-        <div>
-          <span>教学内容</span>
-          <strong>{{ latestTeachingContents.length }}</strong>
-          <small>已结构化存入课程教学内容表</small>
-        </div>
-        <div>
-          <span>教学方式</span>
-          <strong>{{ teachingMethodOptions.length }}</strong>
-          <small>支持按方式筛选维护</small>
-        </div>
-        <div>
-          <span>基本要求</span>
-          <strong>{{ teachingRequirementCount }}</strong>
-          <small>窗口中使用大输入区编辑</small>
+      <div v-if="latestTeachingContents.length" class="table-shell">
+        <table class="data-table compact-table teaching-preview-table">
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th>教学内容</th>
+              <th>讲授学时</th>
+              <th>实践学时</th>
+              <th>教学方式</th>
+              <th>涉及目标</th>
+              <th>基本要求</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(item, index) in previewTeachingContents" :key="item.id || `${index}-${item.title || 'row'}`">
+              <td class="nowrap">{{ (currentPreviewTeachingPage - 1) * teachingPreviewPageSize + index + 1 }}</td>
+              <td>{{ item.title || '—' }}</td>
+              <td>{{ item.lectureHours || 0 }}</td>
+              <td>{{ item.practiceHours || 0 }}</td>
+              <td>{{ item.teachingMethod || '—' }}</td>
+              <td>{{ item.relatedObjectives || '—' }}</td>
+              <td>
+                <div class="preview-requirements">{{ item.requirements || '—' }}</div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="latestTeachingContents.length" class="table-pager">
+        <span class="muted">
+          第 {{ currentPreviewTeachingPage }} / {{ previewTeachingPageCount }} 页，共 {{ latestTeachingContents.length }} 条
+        </span>
+        <div class="actions-inline">
+          <button class="btn btn-light btn-mini" :disabled="currentPreviewTeachingPage <= 1" @click="changePreviewTeachingPage(currentPreviewTeachingPage - 1)">上一页</button>
+          <button class="btn btn-light btn-mini" :disabled="currentPreviewTeachingPage >= previewTeachingPageCount" @click="changePreviewTeachingPage(currentPreviewTeachingPage + 1)">下一页</button>
         </div>
       </div>
       <EmptyState
         v-if="!latestTeachingContents.length"
         mark="内容"
         title="暂无教学内容"
-        description="可点击新增教学内容手动补充；若要从大纲自动提取，可先使用智能解析导入。"
       />
     </PanelCard>
 
@@ -313,6 +325,85 @@
       </section>
     </div>
 
+    <div v-if="assessDialog.open" class="modal-backdrop" @click.self="closeAssessDialog">
+      <section class="modal-panel assess-modal-panel" role="dialog" aria-modal="true" aria-label="考核项修改">
+        <header class="modal-head">
+          <div>
+            <h2>考核项修改</h2>
+            <p>{{ selectedCourseText }} / {{ filters.semester }}</p>
+          </div>
+          <button class="btn btn-light btn-mini" @click="closeAssessDialog">关闭</button>
+        </header>
+        <div class="modal-body assess-modal-body">
+          <div class="assess-summary">
+            <div>
+              <span>考核项</span>
+              <strong>{{ assessItemDrafts.length }}</strong>
+            </div>
+            <div>
+              <span>权重合计</span>
+              <strong>{{ formatNumber(assessWeightTotal) }}</strong>
+            </div>
+            <div>
+              <span>满分</span>
+              <strong>{{ formatNumber(assessMaxScoreTotal) }}</strong>
+            </div>
+          </div>
+
+          <PanelCard title="考核项维护">
+            <template #actions>
+              <button class="btn btn-light" @click="addAssessItemRow">新增考核项</button>
+            </template>
+            <div class="table-shell assess-edit-shell">
+              <table class="data-table compact-table assess-edit-table">
+                <thead>
+                  <tr>
+                    <th>考核项</th>
+                    <th>类型</th>
+                    <th>权重</th>
+                    <th>满分</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, index) in assessItemDrafts" :key="item.__rowKey">
+                    <td>
+                      <input v-model.trim="item.itemName" class="text-input assess-name-input" />
+                    </td>
+                    <td>
+                      <select v-model="item.itemType" class="select-input assess-type-select">
+                        <option value="normal">平时</option>
+                        <option value="mid">期中</option>
+                        <option value="final">期末</option>
+                        <option value="practice">实践</option>
+                        <option value="report">报告</option>
+                      </select>
+                    </td>
+                    <td>
+                      <input v-model="item.weight" class="text-input assess-number-input" type="number" min="0" max="100" step="0.01" />
+                    </td>
+                    <td>
+                      <input v-model="item.maxScore" class="text-input assess-number-input" type="number" min="0" step="0.5" />
+                    </td>
+                    <td>
+                      <button class="btn btn-danger btn-mini" @click="removeAssessItemRow(index)">删除</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </PanelCard>
+
+          <div class="modal-footer-actions">
+            <span class="muted">考核项权重合计应为 100。</span>
+            <button class="btn btn-primary" :disabled="savingAssessItems" @click="saveAssessItems">
+              {{ savingAssessItems ? '保存中...' : '保存考核项' }}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div v-if="teachingDialog.open" class="modal-backdrop" @click.self="closeTeachingDialog">
       <section class="modal-panel teaching-modal-panel" role="dialog" aria-modal="true" aria-label="教学内容表">
         <header class="modal-head">
@@ -323,7 +414,7 @@
           <button class="btn btn-light btn-mini" @click="closeTeachingDialog">关闭</button>
         </header>
         <div class="modal-body teaching-modal-body">
-          <div class="teaching-toolbar">
+          <div class="filter-bar modal-filter-bar">
             <div class="filter-field">
               <label>教学方式</label>
               <select v-model="teachingMethodFilter" class="select-input" @change="resetTeachingScroll">
@@ -339,58 +430,77 @@
             </div>
           </div>
 
-          <div class="teaching-scroll" @scroll="handleTeachingScroll">
-            <div v-if="visibleTeachingContents.length" class="teaching-card-list">
-              <article
-                v-for="item in visibleTeachingContents"
-                :key="item.__rowKey"
-                class="teaching-edit-card"
-              >
-                <div class="teaching-card-main">
-                  <div class="row-index">{{ item.__displayIndex }}</div>
-                  <div class="form-field">
-                    <label>教学内容</label>
-                    <textarea v-model.trim="item.title" class="text-area title-area" />
-                  </div>
-                  <div class="form-field">
-                    <label>教学方式</label>
-                    <select v-model="item.teachingMethod" class="select-input">
-                      <option value="">未设置</option>
-                      <option v-for="method in teachingMethodOptions" :key="method" :value="method">
-                        {{ method }}
-                      </option>
-                    </select>
-                  </div>
-                  <div class="form-field">
-                    <label>讲授学时</label>
-                    <input v-model="item.lectureHours" class="text-input" type="number" min="0" step="0.5" />
-                  </div>
-                  <div class="form-field">
-                    <label>实践学时</label>
-                    <input v-model="item.practiceHours" class="text-input" type="number" min="0" step="0.5" />
-                  </div>
-                  <div class="form-field">
-                    <label>涉及目标</label>
-                    <input v-model.trim="item.relatedObjectives" class="text-input" placeholder="如：课程目标1、2" />
-                  </div>
-                </div>
-
-                <div class="requirements-panel">
-                  <div class="form-field">
-                    <label>基本要求</label>
-                    <textarea v-model.trim="item.requirements" class="text-area requirements-area" />
-                  </div>
-                  <button class="btn btn-danger btn-mini" @click="removeTeachingContentRow(item.__sourceIndex)">删除</button>
-                </div>
-              </article>
+          <div class="teaching-summary">
+            <div>
+              <span>教学内容</span>
+              <strong>{{ filteredTeachingContents.length }}</strong>
             </div>
-            <EmptyState
-              v-else
-              mark="内容"
-              title="暂无匹配的教学内容"
-              description="可调整教学方式筛选，或新增教学内容。"
-            />
+            <div>
+              <span>已显示</span>
+              <strong>{{ visibleTeachingContents.length }}</strong>
+            </div>
+            <div>
+              <span>基本要求</span>
+              <strong>{{ filteredTeachingRequirementCount }}</strong>
+            </div>
           </div>
+
+          <PanelCard class="teaching-edit-panel" title="教学内容维护">
+            <div class="teaching-scroll" @scroll="handleTeachingScroll">
+              <div v-if="visibleTeachingContents.length" class="table-shell teaching-edit-shell">
+                <table class="data-table compact-table teaching-modal-table">
+                  <thead>
+                    <tr>
+                      <th>序号</th>
+                      <th>教学内容</th>
+                      <th>讲授学时</th>
+                      <th>实践学时</th>
+                      <th>教学方式</th>
+                      <th>涉及目标</th>
+                      <th>基本要求</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in visibleTeachingContents" :key="item.__rowKey">
+                      <td class="nowrap">{{ item.__displayIndex }}</td>
+                      <td>
+                        <textarea v-model.trim="item.title" class="text-area title-area"></textarea>
+                      </td>
+                      <td>
+                        <input v-model="item.lectureHours" class="text-input hours-input" type="number" min="0" step="0.5" />
+                      </td>
+                      <td>
+                        <input v-model="item.practiceHours" class="text-input hours-input" type="number" min="0" step="0.5" />
+                      </td>
+                      <td>
+                        <select v-model="item.teachingMethod" class="select-input method-select">
+                          <option value="">未设置</option>
+                          <option v-for="method in teachingMethodOptions" :key="method" :value="method">
+                            {{ method }}
+                          </option>
+                        </select>
+                      </td>
+                      <td>
+                        <input v-model.trim="item.relatedObjectives" class="text-input objective-input" placeholder="如：课程目标1、2" />
+                      </td>
+                      <td>
+                        <textarea v-model.trim="item.requirements" class="text-area requirements-edit-area"></textarea>
+                      </td>
+                      <td>
+                        <button class="btn btn-danger btn-mini" @click="removeTeachingContentRow(item.__sourceIndex)">删除</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <EmptyState
+                v-else
+                mark="内容"
+                title="暂无匹配的教学内容"
+              />
+            </div>
+          </PanelCard>
 
           <div class="modal-footer-actions">
             <span class="muted">
@@ -409,7 +519,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getCourseDetail, getReferenceCatalogs, saveOutline, updateCourse, updateCourseTeachingContents } from '@/api'
+import {
+  getCourseDetail,
+  getReferenceCatalogs,
+  saveOutline,
+  updateCourse,
+  updateCourseAssessItems,
+  updateCourseTeachingContents
+} from '@/api'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
@@ -446,8 +563,11 @@ const outlineForm = reactive(blankOutline())
 const savingCourse = ref(false)
 const savingOutline = ref(false)
 const savingTeachingContents = ref(false)
+const savingAssessItems = ref(false)
 const teachingVisibleLimit = ref(10)
 const teachingMethodFilter = ref('')
+const previewTeachingPage = ref(1)
+const assessItemDrafts = ref([])
 const message = reactive({
   type: 'success',
   text: ''
@@ -460,10 +580,24 @@ const objectiveDialog = reactive({
 const teachingDialog = reactive({
   open: false
 })
+const assessDialog = reactive({
+  open: false
+})
 
 const defaultTeachingMethods = ['讲授', '上机', '实验', '实践', '讨论', '案例教学', '项目教学', '线上', '线下', '混合式']
+const teachingPreviewPageSize = 10
 
 const latestTeachingContents = computed(() => arrayValue(detail.latestParsedCourse.teachingContents))
+const previewTeachingPageCount = computed(() =>
+  Math.max(1, Math.ceil(latestTeachingContents.value.length / teachingPreviewPageSize))
+)
+const currentPreviewTeachingPage = computed(() =>
+  Math.min(previewTeachingPage.value, previewTeachingPageCount.value)
+)
+const previewTeachingContents = computed(() => {
+  const start = (currentPreviewTeachingPage.value - 1) * teachingPreviewPageSize
+  return latestTeachingContents.value.slice(start, start + teachingPreviewPageSize)
+})
 const teachingMethodOptions = computed(() => {
   const methods = new Set(defaultTeachingMethods)
   latestTeachingContents.value.forEach((item) => {
@@ -485,11 +619,17 @@ const filteredTeachingContents = computed(() =>
 const visibleTeachingContents = computed(() =>
   filteredTeachingContents.value.slice(0, teachingVisibleLimit.value)
 )
-const teachingRequirementCount = computed(() =>
-  latestTeachingContents.value.filter((item) => String(item.requirements || '').trim()).length
+const filteredTeachingRequirementCount = computed(() =>
+  filteredTeachingContents.value.filter((item) => String(item.requirements || '').trim()).length
 )
 const hasMoreTeachingContents = computed(() =>
   visibleTeachingContents.value.length < filteredTeachingContents.value.length
+)
+const assessWeightTotal = computed(() =>
+  assessItemDrafts.value.reduce((sum, item) => sum + Number(item.weight || 0), 0)
+)
+const assessMaxScoreTotal = computed(() =>
+  assessItemDrafts.value.reduce((sum, item) => sum + Number(item.maxScore || 0), 0)
 )
 const teacherText = computed(() => detail.teacherNames.length ? detail.teacherNames.join('、') : '未配置')
 const objectiveMap = computed(() => new Map(detail.objectives.map((item) => [Number(item.id), item])))
@@ -550,6 +690,12 @@ function ensureTeachingContentsShape() {
     detail.latestParsedCourse.teachingContents = []
   }
   return detail.latestParsedCourse.teachingContents
+}
+
+function changePreviewTeachingPage(page) {
+  const numericPage = Number(page)
+  const safePage = Number.isFinite(numericPage) ? numericPage : 1
+  previewTeachingPage.value = Math.min(Math.max(1, safePage), previewTeachingPageCount.value)
 }
 
 function setMessage(type, text) {
@@ -620,6 +766,7 @@ function applyDetail(payload) {
   detail.latestParsedCourse = payload.latestParsedCourse || {}
   ensureTeachingContentsShape()
   resetTeachingScroll()
+  changePreviewTeachingPage(1)
   detail.summary = payload.summary || {}
   applyCourse(detail.course)
   applyOutline(detail.outline)
@@ -709,6 +856,77 @@ function emptyTeachingContent() {
   }
 }
 
+function cloneAssessItems() {
+  assessItemDrafts.value = detail.assessItems.map((item, index) => ({
+    id: item.id || null,
+    itemName: item.itemName || '',
+    itemType: item.itemType || 'normal',
+    weight: item.weight ?? '',
+    maxScore: item.maxScore ?? 100,
+    __rowKey: item.id || `new-${Date.now()}-${index}`
+  }))
+}
+
+function emptyAssessItem() {
+  return {
+    id: null,
+    itemName: '',
+    itemType: 'normal',
+    weight: '',
+    maxScore: 100,
+    __rowKey: `new-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+}
+
+function addAssessItemRow() {
+  assessItemDrafts.value.push(emptyAssessItem())
+}
+
+function removeAssessItemRow(index) {
+  assessItemDrafts.value.splice(index, 1)
+}
+
+function validateAssessItemDrafts() {
+  if (!assessItemDrafts.value.length) {
+    setMessage('error', '至少需要保留 1 个考核项。')
+    return false
+  }
+  if (assessItemDrafts.value.some((item) => !String(item.itemName || '').trim())) {
+    setMessage('error', '考核项名称不能为空。')
+    return false
+  }
+  if (Math.abs(assessWeightTotal.value - 100) > 0.01) {
+    setMessage('error', `考核项权重合计必须等于 100，当前为 ${formatNumber(assessWeightTotal.value)}。`)
+    return false
+  }
+  return true
+}
+
+async function saveAssessItems() {
+  if (!validateAssessItemDrafts()) return
+
+  savingAssessItems.value = true
+  try {
+    const payload = {
+      assessItems: assessItemDrafts.value.map((item) => ({
+        id: item.id || null,
+        itemName: item.itemName || '',
+        itemType: item.itemType || 'normal',
+        weight: numberOrNull(item.weight) ?? 0,
+        maxScore: numberOrNull(item.maxScore) ?? 100
+      }))
+    }
+    const result = await updateCourseAssessItems(filters.courseId, filters.semester, payload)
+    applyDetail(result)
+    cloneAssessItems()
+    setMessage('success', '考核项已保存。')
+  } catch (error) {
+    setMessage('error', error.message || '考核项保存失败。')
+  } finally {
+    savingAssessItems.value = false
+  }
+}
+
 function addTeachingContentRow() {
   const rows = ensureTeachingContentsShape()
   const row = emptyTeachingContent()
@@ -778,6 +996,16 @@ function openObjectiveDialog(type) {
 
 async function closeObjectiveDialog() {
   objectiveDialog.open = false
+  await loadCourseDetail()
+}
+
+function openAssessDialog() {
+  cloneAssessItems()
+  assessDialog.open = true
+}
+
+async function closeAssessDialog() {
+  assessDialog.open = false
   await loadCourseDetail()
 }
 
@@ -970,7 +1198,22 @@ onBeforeUnmount(clearMessageTimer)
   gap: 12px;
 }
 
+.assess-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .teaching-summary > div {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fbfdfe;
+}
+
+.assess-summary > div {
   display: grid;
   gap: 7px;
   padding: 14px;
@@ -984,9 +1227,39 @@ onBeforeUnmount(clearMessageTimer)
   color: var(--color-text-soft);
 }
 
+.assess-summary span {
+  color: var(--color-text-soft);
+}
+
 .teaching-summary strong {
   font-size: 24px;
   color: var(--color-primary-deep);
+}
+
+.assess-summary strong {
+  font-size: 24px;
+  color: var(--color-primary-deep);
+}
+
+.teaching-preview-table {
+  min-width: 1080px;
+}
+
+.preview-requirements {
+  min-width: 280px;
+  max-height: 96px;
+  overflow: auto;
+  color: var(--color-text-soft);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.table-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
 }
 
 .btn-mini {
@@ -1001,78 +1274,90 @@ onBeforeUnmount(clearMessageTimer)
 
 .teaching-modal-body {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 14px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 16px;
 }
 
-.teaching-toolbar {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
+.assess-modal-panel {
+  width: min(960px, 96vw);
+}
+
+.assess-modal-body {
+  display: grid;
+  gap: 16px;
+}
+
+.assess-edit-table {
+  min-width: 760px;
+}
+
+.assess-name-input {
+  min-width: 220px;
+}
+
+.assess-type-select {
+  min-width: 128px;
+}
+
+.assess-number-input {
+  min-width: 96px;
+}
+
+.modal-filter-bar {
+  margin: 0;
+  box-shadow: none;
+}
+
+.teaching-edit-panel {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.teaching-edit-panel :deep(.panel-body) {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .teaching-scroll {
   min-height: 0;
-  max-height: calc(92vh - 230px);
+  max-height: calc(92vh - 390px);
   overflow: auto;
-  padding-right: 4px;
-}
-
-.teaching-card-list {
-  display: grid;
-  gap: 12px;
-}
-
-.teaching-edit-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.9fr);
-  gap: 14px;
-  padding: 14px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
-  box-shadow: var(--shadow-soft);
 }
 
-.teaching-card-main {
-  display: grid;
-  grid-template-columns: 42px minmax(220px, 1.5fr) minmax(140px, 0.8fr) minmax(90px, 0.5fr) minmax(90px, 0.5fr);
-  gap: 12px;
-  align-items: start;
+.teaching-edit-shell {
+  border: 0;
+  border-radius: 0;
 }
 
-.teaching-card-main .form-field:last-child {
-  grid-column: 2 / -1;
-}
-
-.row-index {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  background: var(--bg-accent-soft);
-  color: var(--color-primary-deep);
-  font-weight: 700;
+.teaching-modal-table {
+  min-width: 1320px;
 }
 
 .title-area {
-  min-height: 86px;
+  min-width: 260px;
+  min-height: 96px;
   line-height: 1.65;
 }
 
-.requirements-panel {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 10px;
+.method-select {
+  min-width: 132px;
 }
 
-.requirements-area {
-  min-height: 170px;
+.hours-input {
+  min-width: 86px;
+}
+
+.objective-input {
+  min-width: 170px;
+}
+
+.requirements-edit-area {
+  min-width: 400px;
+  min-height: 160px;
   line-height: 1.75;
   padding: 12px 14px;
   font-size: 14px;
@@ -1144,25 +1429,17 @@ onBeforeUnmount(clearMessageTimer)
 
 @media (max-width: 980px) {
   .summary-grid,
+  .assess-summary,
   .teaching-summary,
   .course-context,
   .form-grid-2 {
     grid-template-columns: 1fr;
   }
 
-  .teaching-toolbar,
+  .table-pager,
   .modal-footer-actions {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .teaching-edit-card,
-  .teaching-card-main {
-    grid-template-columns: 1fr;
-  }
-
-  .teaching-card-main .form-field:last-child {
-    grid-column: auto;
   }
 
   .modal-backdrop {
