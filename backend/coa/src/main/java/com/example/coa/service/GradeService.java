@@ -44,6 +44,14 @@ public class GradeService {
         return delegate.deleteImportedGradeRow(courseId, semester, studentNo, assessItemId);
     }
 
+    public Map<String, Object> getAssessmentContents(Long courseId, String semester) {
+        return delegate.getAssessmentContents(courseId, semester);
+    }
+
+    public Map<String, Object> saveAssessmentContents(Map<String, Object> payload) {
+        return delegate.saveAssessmentContents(payload);
+    }
+
     public Map<String, Object> getClasses(String keyword) {
         return delegate.getClasses(keyword);
     }

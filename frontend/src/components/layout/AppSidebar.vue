@@ -48,7 +48,6 @@ const menuGroups = [
     title: '数据采集',
     items: [
       { label: '班级与学生管理', to: '/collect/classes' },
-      { label: '成绩批量导入', to: '/collect/grades' },
       { label: '学生成绩管理', to: '/collect/grades/manage' }
     ]
   },

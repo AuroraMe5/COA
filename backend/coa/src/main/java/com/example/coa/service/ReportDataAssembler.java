@@ -309,6 +309,7 @@ public class ReportDataAssembler {
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
               AND sg.assess_item_id IN (
                   SELECT id FROM assess_item WHERE outline_id = :outlineId
@@ -363,6 +364,7 @@ public class ReportDataAssembler {
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
               AND sg.assess_item_id IN (
                   SELECT id FROM assess_item WHERE outline_id = :outlineId

@@ -57,6 +57,7 @@ public class AchievementService {
             WHERE ai.outline_id = :outlineId
               AND sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
             GROUP BY COALESCE(ai.item_type, 'other')
             ORDER BY MIN(ai.sort_order), item_type
@@ -88,6 +89,7 @@ public class AchievementService {
             WHERE ai.outline_id = :outlineId
               AND sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
             GROUP BY sg.student_no
             ORDER BY sg.student_no ASC

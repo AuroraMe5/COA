@@ -265,6 +265,14 @@ export function getImportedGrades(params) {
   return getData('/collect/grades', { params })
 }
 
+export function getAssessmentContents(params) {
+  return getData('/collect/assessment-contents', { params })
+}
+
+export function saveAssessmentContents(payload) {
+  return putData('/collect/assessment-contents', payload)
+}
+
 export function saveImportedGradeRow(payload) {
   return postData('/collect/grades/rows', payload)
 }
@@ -275,7 +283,7 @@ export function deleteImportedGradeRow(params) {
 
 // 成绩导入
 export function uploadGradeFile(payload) {
-  return postFormData('/collect/grades/upload', payload, ['file', 'courseId', 'classId', 'semester'])
+  return postFormData('/collect/grades/upload', payload, ['file', 'courseId', 'classId', 'assessItemId', 'semester'])
 }
 
 export function getClasses(params) {

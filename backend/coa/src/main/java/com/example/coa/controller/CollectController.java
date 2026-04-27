@@ -36,6 +36,19 @@ public class CollectController {
         return gradeService.uploadGradeFile(courseId, classId, assessItemId, semester, file);
     }
 
+    @GetMapping("/assessment-contents")
+    public Map<String, Object> getAssessmentContents(
+        @RequestParam Long courseId,
+        @RequestParam String semester
+    ) {
+        return gradeService.getAssessmentContents(courseId, semester);
+    }
+
+    @PutMapping("/assessment-contents")
+    public Map<String, Object> saveAssessmentContents(@RequestBody Map<String, Object> payload) {
+        return gradeService.saveAssessmentContents(payload);
+    }
+
     @GetMapping("/classes")
     public Map<String, Object> getClasses(@RequestParam(required = false) String keyword) {
         return gradeService.getClasses(keyword);

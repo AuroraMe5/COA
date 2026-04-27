@@ -247,12 +247,12 @@ public class InMemoryCoaService {
             todos.add(map("id", 1, "text", "有待复核的智能解析任务。", "route", "/objectives/parse-import", "level", "high"));
         }
         if (count("SELECT COUNT(*) FROM grade_import_batch WHERE status = 'PARSED'") > 0) {
-            todos.add(map("id", 2, "text", "有已解析的成绩批次等待确认导入。", "route", "/collect/grades", "level", "medium"));
+            todos.add(map("id", 2, "text", "有已解析的成绩批次等待确认导入。", "route", "/collect/grades/manage", "level", "medium"));
         }
 
         List<Map<String, Object>> quickLinks = List.of(
             map("label", "教学目标管理", "route", "/objectives/list"),
-            map("label", "数据采集", "route", "/collect/grades"),
+            map("label", "数据采集", "route", "/collect/grades/manage"),
             map("label", "达成度核算与报告", "route", "/analysis/calculation")
         );
 
@@ -906,7 +906,7 @@ public class InMemoryCoaService {
         List<Map<String, Object>> submittedTeachingContents = normalizeTeachingContents(listOfMap(mergedCourseInfo.get("teachingContents")));
 
         boolean useAllObjectiveDrafts = booleanValue(reviewConfirmations.get("objectives"));
-        String objectiveConfirmFilter = useAllObjectiveDrafts ? "AND is_confirmed <> 2" : "AND is_confirmed = 1";
+        String objectiveConfirmFilter = useAllObjectiveDrafts ? "  AND is_confirmed <> 2\n" : "  AND is_confirmed = 1\n";
         List<Map<String, Object>> objectiveDrafts = jdbcTemplate.query("""
             SELECT *
             FROM parse_objective_draft
@@ -926,7 +926,7 @@ public class InMemoryCoaService {
         validateConfirmedWeightTotal(objectiveDrafts, "课程目标", true);
 
         boolean useAllAssessDrafts = booleanValue(reviewConfirmations.get("assessItems"));
-        String assessConfirmFilter = useAllAssessDrafts ? "AND is_confirmed <> 2" : "AND is_confirmed = 1";
+        String assessConfirmFilter = useAllAssessDrafts ? "  AND is_confirmed <> 2\n" : "  AND is_confirmed = 1\n";
         List<Map<String, Object>> assessDrafts = jdbcTemplate.query("""
             SELECT *
             FROM parse_assess_item_draft
@@ -1269,6 +1269,138 @@ public class InMemoryCoaService {
         return map("success", true);
     }
 
+    public Map<String, Object> getAssessmentContents(Long courseId, String semester) {
+        long currentCourseId = normalizeCourseId(courseId);
+        String currentSemester = normalizeSemester(semester);
+        List<Map<String, Object>> assessItems = currentCourseAssessItems(currentCourseId, currentSemester);
+        if (assessItems.isEmpty()) {
+            return map("assessItems", List.of(), "contents", List.of(), "warnings", List.of("当前课程学期尚未配置考核项。"));
+        }
+        ensureDefaultAssessContents(assessItems);
+        List<Map<String, Object>> contents = activeAssessContents(assessItems.stream().map(item -> longValue(item.get("id"))).toList());
+        Map<Long, List<Map<String, Object>>> contentsByItem = contents.stream()
+            .collect(Collectors.groupingBy(
+                item -> longValue(item.get("assessItemId")),
+                LinkedHashMap::new,
+                Collectors.toCollection(ArrayList::new)
+            ));
+
+        List<Map<String, Object>> groupedItems = assessItems.stream().map(item -> {
+            long assessItemId = longValue(item.get("id"));
+            List<Map<String, Object>> itemContents = contentsByItem.getOrDefault(assessItemId, List.of());
+            double contentWeight = itemContents.stream().mapToDouble(content -> doubleValue(content.get("weight"))).sum();
+            return map(
+                "id", assessItemId,
+                "itemName", item.get("itemName"),
+                "itemType", item.get("itemType"),
+                "itemTypeName", item.get("itemTypeName"),
+                "weight", item.get("weight"),
+                "contentWeight", round2(contentWeight),
+                "contents", itemContents
+            );
+        }).toList();
+
+        return map(
+            "assessItems", groupedItems,
+            "contents", contents,
+            "warnings", assessmentContentWarnings(groupedItems)
+        );
+    }
+
+    public Map<String, Object> saveAssessmentContents(Map<String, Object> payload) {
+        long courseId = longValue(payload.get("courseId"));
+        String semester = defaultString(payload.get("semester"), "");
+        List<Map<String, Object>> assessItems = currentCourseAssessItems(courseId, semester);
+        if (assessItems.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "当前课程学期尚未配置考核项，无法维护考核内容。");
+        }
+        Map<Long, Map<String, Object>> assessById = assessItems.stream()
+            .collect(Collectors.toMap(item -> longValue(item.get("id")), item -> item, (left, right) -> left, LinkedHashMap::new));
+        List<Map<String, Object>> contents = listOfMap(payload.get("contents"));
+        if (contents.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "至少需要保留 1 条考核内容。");
+        }
+
+        Map<Long, Double> weightByAssess = new LinkedHashMap<>();
+        for (Map<String, Object> row : contents) {
+            long assessItemId = longValue(row.get("assessItemId"));
+            if (!assessById.containsKey(assessItemId)) {
+                throw new ApiException(UNPROCESSABLE_STATUS, 400, "考核内容关联的考核项不存在。");
+            }
+            String contentName = defaultString(row.get("contentName"), "").trim();
+            if (!StringUtils.hasText(contentName)) {
+                throw new ApiException(UNPROCESSABLE_STATUS, 400, "考核内容不能为空。");
+            }
+            double weight = round2(defaultDouble(row.get("weight"), 0D));
+            if (weight < 0D) {
+                throw new ApiException(UNPROCESSABLE_STATUS, 400, "考核内容权重不能为负数。");
+            }
+            weightByAssess.merge(assessItemId, weight, Double::sum);
+        }
+        Set<Long> keepIds = new LinkedHashSet<>();
+        int order = 1;
+        for (Map<String, Object> row : contents) {
+            long assessItemId = longValue(row.get("assessItemId"));
+            Long id = nullableLong(row.get("id"));
+            String contentNo = defaultString(row.get("contentNo"), "").trim();
+            if (!StringUtils.hasText(contentNo)) {
+                contentNo = String.valueOf(order);
+            }
+            String contentName = defaultString(row.get("contentName"), "").trim();
+            String contentType = normalizeAssessContentType(defaultString(row.get("contentType"), ""));
+            double weight = round2(defaultDouble(row.get("weight"), 0D));
+            int sortOrder = defaultInt(row.get("sortOrder"), order);
+            MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("assessItemId", assessItemId)
+                .addValue("contentNo", contentNo)
+                .addValue("contentName", contentName)
+                .addValue("contentType", contentType)
+                .addValue("weight", weight)
+                .addValue("sortOrder", sortOrder);
+            if (id == null) {
+                jdbcTemplate.update("""
+                    INSERT INTO assess_content (
+                        assess_item_id, content_no, content_name, content_type, weight, sort_order, status
+                    ) VALUES (
+                        :assessItemId, :contentNo, :contentName, :contentType, :weight, :sortOrder, 1
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        content_name = VALUES(content_name),
+                        content_type = VALUES(content_type),
+                        weight = VALUES(weight),
+                        sort_order = VALUES(sort_order),
+                        status = 1,
+                        updated_at = NOW()
+                    """, params);
+                id = queryLong("""
+                    SELECT id
+                    FROM assess_content
+                    WHERE assess_item_id = :assessItemId
+                      AND content_no = :contentNo
+                    """, params);
+            } else {
+                jdbcTemplate.update("""
+                    UPDATE assess_content
+                    SET assess_item_id = :assessItemId,
+                        content_no = :contentNo,
+                        content_name = :contentName,
+                        content_type = :contentType,
+                        weight = :weight,
+                        sort_order = :sortOrder,
+                        status = 1,
+                        updated_at = NOW()
+                    WHERE id = :id
+                    """, params);
+            }
+            keepIds.add(id);
+            order++;
+        }
+
+        retireRemovedAssessContents(assessById.keySet(), keepIds);
+        return getAssessmentContents(courseId, semester);
+    }
+
     public Map<String, Object> uploadGradeFile(Long courseId, Long classId, Long assessItemId, String semester, MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, 400, "请先上传成绩文件。");
@@ -1284,16 +1416,27 @@ public class InMemoryCoaService {
         if (assessItems.isEmpty()) {
             throw new ApiException(UNPROCESSABLE_STATUS, 400, "当前课程尚未配置考核项，请先在教学目标管理中维护考核项。");
         }
+        List<Map<String, Object>> targetAssessItems = assessItemId == null
+            ? assessItems
+            : assessItems.stream().filter(item -> longValue(item.get("id")) == assessItemId).toList();
+        if (targetAssessItems.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "未找到本次导入关联的考核项。");
+        }
+        ensureDefaultAssessContents(targetAssessItems);
+        List<Map<String, Object>> targetContents = assessItemId == null
+            ? activeAssessContents(targetAssessItems.stream().map(item -> longValue(item.get("id"))).toList())
+            : activeAssessContentsByItem(assessItemId);
         long batchAssessItemId = assessItemId == null ? longValue(assessItems.get(0).get("id")) : assessItemId;
+        Long batchAssessContentId = targetContents.size() == 1 ? longValue(targetContents.get(0).get("id")) : null;
         String batchNo = "GRADE-" + System.currentTimeMillis();
 
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbcTemplate.update("""
             INSERT INTO grade_import_batch (
-                batch_no, course_id, class_id, assess_item_id, teacher_id, semester_id, source_file_name,
+                batch_no, course_id, class_id, assess_item_id, assess_content_id, teacher_id, semester_id, source_file_name,
                 status, total_rows, valid_rows, error_rows, import_mode
             ) VALUES (
-                :batchNo, :courseId, :classId, :assessItemId, :teacherId, :semesterId, :fileName,
+                :batchNo, :courseId, :classId, :assessItemId, :assessContentId, :teacherId, :semesterId, :fileName,
                 'PARSING', 12, 10, 2, 'valid_only'
             )
             """, new MapSqlParameterSource()
@@ -1301,13 +1444,16 @@ public class InMemoryCoaService {
             .addValue("courseId", currentCourseId)
             .addValue("classId", classId)
             .addValue("assessItemId", batchAssessItemId)
+            .addValue("assessContentId", batchAssessContentId)
             .addValue("teacherId", teacherId)
             .addValue("semesterId", semesterId)
             .addValue("fileName", fileName), keyHolder);
         long batchId = keyHolder.getKey().longValue();
 
         try {
-            GradeImportResult result = parseGradeFile(file, fileName, assessItems);
+            GradeImportResult result = targetContents.isEmpty()
+                ? parseGradeFile(file, fileName, targetAssessItems)
+                : parseGradeContentFile(file, fileName, targetContents);
             persistGradeImportRows(batchId, currentCourseId, classId, semesterId, teacherId, result.rows());
             markDuplicateGradeRows(batchId, currentCourseId, semesterId);
             refreshGradeBatchCounts(batchId);
@@ -1363,13 +1509,16 @@ public class InMemoryCoaService {
                 sg.student_no,
                 sg.student_name,
                 sg.assess_item_id,
+                sg.assess_content_id,
                 ai.item_name,
+                ac.content_name,
                 sg.score,
                 sg.max_score,
                 sg.valid_flag,
                 sg.error_message
             FROM student_grade sg
             JOIN assess_item ai ON ai.id = sg.assess_item_id
+            LEFT JOIN assess_content ac ON ac.id = sg.assess_content_id
             WHERE sg.import_batch_id = :batchId
             ORDER BY sg.id ASC
             """, params("batchId", longValue(batch.get("id"))), (rs, rowNum) -> map(
@@ -1378,7 +1527,9 @@ public class InMemoryCoaService {
             "studentId", rs.getString("student_no"),
             "name", rs.getString("student_name"),
             "assessItemId", rs.getLong("assess_item_id"),
-            "assessItemName", rs.getString("item_name"),
+            "assessContentId", nullableLong(rs.getObject("assess_content_id")),
+            "assessItemName", defaultString(rs.getString("content_name"), rs.getString("item_name")),
+            "parentAssessItemName", rs.getString("item_name"),
             "score", rs.getBigDecimal("score"),
             "maxScore", rs.getBigDecimal("max_score"),
             "valid", rs.getInt("valid_flag") == 1,
@@ -1443,19 +1594,27 @@ public class InMemoryCoaService {
     }
 
     private List<Map<String, Object>> buildGradePreviewColumns(List<Map<String, Object>> preview) {
-        Map<Long, Map<String, Object>> columns = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> columns = new LinkedHashMap<>();
         for (Map<String, Object> item : preview) {
-            long assessItemId = longValue(item.get("assessItemId"));
-            if (columns.containsKey(assessItemId)) {
+            String columnKey = gradeColumnKey(item);
+            if (columns.containsKey(columnKey)) {
                 continue;
             }
-            columns.put(assessItemId, map(
-                "assessItemId", assessItemId,
+            columns.put(columnKey, map(
+                "columnKey", columnKey,
+                "assessItemId", item.get("assessItemId"),
+                "assessContentId", item.get("assessContentId"),
                 "assessItemName", item.get("assessItemName"),
+                "parentAssessItemName", item.get("parentAssessItemName"),
                 "maxScore", item.get("maxScore")
             ));
         }
         return new ArrayList<>(columns.values());
+    }
+
+    private String gradeColumnKey(Map<String, Object> item) {
+        Long assessContentId = nullableLong(item.get("assessContentId"));
+        return longValue(item.get("assessItemId")) + ":" + (assessContentId == null ? 0L : assessContentId);
     }
 
     private List<Map<String, Object>> buildGradePreviewRows(
@@ -1468,17 +1627,17 @@ public class InMemoryCoaService {
         for (int start = 0; start < preview.size(); start += columnCount) {
             List<Map<String, Object>> items = preview.subList(start, Math.min(start + columnCount, preview.size()));
             Map<String, Object> first = items.get(0);
-            Map<Long, Map<String, Object>> itemByAssessId = new LinkedHashMap<>();
+            Map<String, Map<String, Object>> itemByColumnKey = new LinkedHashMap<>();
             for (Map<String, Object> item : items) {
-                itemByAssessId.put(longValue(item.get("assessItemId")), item);
+                itemByColumnKey.put(gradeColumnKey(item), item);
             }
 
             List<Map<String, Object>> cells = new ArrayList<>();
             boolean valid = true;
             List<String> errors = new ArrayList<>();
             for (Map<String, Object> column : columns) {
-                long assessItemId = longValue(column.get("assessItemId"));
-                Map<String, Object> item = itemByAssessId.get(assessItemId);
+                String columnKey = defaultString(column.get("columnKey"), "");
+                Map<String, Object> item = itemByColumnKey.get(columnKey);
                 boolean cellValid = item != null && booleanValue(item.get("valid"));
                 String errorMsg = item == null ? "missing grade cell" : defaultString(item.get("errorMsg"), "有效");
                 if (!cellValid) {
@@ -1486,9 +1645,12 @@ public class InMemoryCoaService {
                     errors.add(defaultString(column.get("assessItemName"), "") + "：" + errorMsg);
                 }
                 cells.add(map(
+                    "columnKey", columnKey,
                     "gradeId", item == null ? null : item.get("gradeId"),
-                    "assessItemId", assessItemId,
+                    "assessItemId", column.get("assessItemId"),
+                    "assessContentId", column.get("assessContentId"),
                     "assessItemName", column.get("assessItemName"),
+                    "parentAssessItemName", column.get("parentAssessItemName"),
                     "score", item == null ? "" : item.get("score"),
                     "maxScore", item == null ? column.get("maxScore") : item.get("maxScore"),
                     "valid", cellValid,
@@ -1519,9 +1681,12 @@ public class InMemoryCoaService {
             List<Map<String, Object>> matchedItems = assessItems.stream()
                 .filter(item -> String.valueOf(item.get("id")).equals(assessItemId))
                 .map(item -> map(
+                    "columnKey", longValue(item.get("id")) + ":0",
                     "assessItemId", item.get("id"),
+                    "assessContentId", null,
                     "assessItemName", item.get("itemName"),
-                    "maxScore", 100
+                    "parentAssessItemName", item.get("itemName"),
+                    "maxScore", item.get("weight")
                 ))
                 .toList();
             if (!matchedItems.isEmpty()) {
@@ -1529,22 +1694,34 @@ public class InMemoryCoaService {
             }
             return importedItems.stream()
                 .filter(item -> String.valueOf(item.get("assessItemId")).equals(assessItemId))
-                .map(item -> map("assessItemId", item.get("assessItemId"), "assessItemName", item.get("itemName"), "maxScore", item.get("maxScore")))
+                .map(item -> map(
+                    "columnKey", longValue(item.get("assessItemId")) + ":0",
+                    "assessItemId", item.get("assessItemId"),
+                    "assessContentId", null,
+                    "assessItemName", item.get("itemName"),
+                    "parentAssessItemName", item.get("itemName"),
+                    "maxScore", item.get("weight")
+                ))
                 .distinct()
                 .toList();
         }
 
         if (!assessItems.isEmpty()) {
             return assessItems.stream().map(item -> map(
+                "columnKey", longValue(item.get("id")) + ":0",
                 "assessItemId", item.get("id"),
+                "assessContentId", null,
                 "assessItemName", item.get("itemName"),
-                "maxScore", 100
+                "parentAssessItemName", item.get("itemName"),
+                "maxScore", item.get("weight")
             )).toList();
         }
 
         return buildGradePreviewColumns(importedItems.stream().map(item -> map(
             "assessItemId", item.get("assessItemId"),
+            "assessContentId", null,
             "assessItemName", item.get("itemName"),
+            "parentAssessItemName", item.get("itemName"),
             "maxScore", item.get("maxScore")
         )).toList());
     }
@@ -1573,9 +1750,12 @@ public class InMemoryCoaService {
                 long assessItemId = longValue(column.get("assessItemId"));
                 Map<String, Object> item = itemByAssessId.get(assessItemId);
                 cells.add(map(
+                    "columnKey", defaultString(column.get("columnKey"), assessItemId + ":0"),
                     "gradeId", item == null ? null : item.get("gradeId"),
                     "assessItemId", assessItemId,
+                    "assessContentId", column.get("assessContentId"),
                     "assessItemName", column.get("assessItemName"),
+                    "parentAssessItemName", column.get("parentAssessItemName"),
                     "score", item == null ? "" : item.get("score"),
                     "maxScore", item == null ? column.get("maxScore") : item.get("maxScore"),
                     "valid", true,
@@ -1595,6 +1775,187 @@ public class InMemoryCoaService {
         return rows;
     }
 
+    private List<Map<String, Object>> queryImportedGradeComponents(
+        long courseId,
+        long semesterId,
+        String assessItemId,
+        String classId,
+        String keyword
+    ) {
+        StringBuilder sql = new StringBuilder("""
+            SELECT
+                sg.id,
+                sg.student_no,
+                sg.student_name,
+                sg.class_id,
+                bc.class_name,
+                sg.score,
+                sg.max_score,
+                ai.id AS assess_item_id,
+                ai.item_name,
+                ac.id AS assess_content_id,
+                ac.content_name,
+                ac.content_no,
+                ac.content_type,
+                sg.valid_flag
+            FROM student_grade sg
+            JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
+            JOIN assess_item ai ON ai.id = sg.assess_item_id
+            JOIN assess_content ac ON ac.id = sg.assess_content_id
+            LEFT JOIN base_class bc ON bc.id = sg.class_id
+            WHERE gb.status = 'CONFIRMED'
+              AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NOT NULL
+              AND sg.course_id = :courseId
+              AND sg.semester_id = :semesterId
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId);
+        appendTextFilter(sql, params, "assessItemId", assessItemId, "sg.assess_item_id = :assessItemId");
+        appendTextFilter(sql, params, "classId", classId, "sg.class_id = :classId");
+        if (StringUtils.hasText(keyword)) {
+            sql.append(" AND (sg.student_no LIKE :keyword OR sg.student_name LIKE :keyword)");
+            params.addValue("keyword", "%" + keyword.trim() + "%");
+        }
+        sql.append(" ORDER BY sg.student_no ASC, ai.sort_order ASC, ac.sort_order ASC, ac.id ASC, sg.id ASC");
+        return jdbcTemplate.query(sql.toString(), params, (rs, rowNum) -> map(
+            "id", rs.getLong("id"),
+            "gradeId", rs.getLong("id"),
+            "studentNo", rs.getString("student_no"),
+            "studentId", rs.getString("student_no"),
+            "studentName", rs.getString("student_name"),
+            "name", rs.getString("student_name"),
+            "classId", nullableLong(rs.getObject("class_id")),
+            "className", defaultString(rs.getString("class_name"), ""),
+            "score", rs.getBigDecimal("score"),
+            "maxScore", rs.getBigDecimal("max_score"),
+            "assessItemId", rs.getLong("assess_item_id"),
+            "assessContentId", rs.getLong("assess_content_id"),
+            "assessItemName", rs.getString("content_name"),
+            "parentAssessItemName", rs.getString("item_name"),
+            "contentNo", rs.getString("content_no"),
+            "contentType", rs.getString("content_type"),
+            "contentTypeName", assessContentTypeName(rs.getString("content_type")),
+            "validFlag", rs.getInt("valid_flag")
+        ));
+    }
+
+    private List<Map<String, Object>> gradeComponentManageColumns(long courseId, String semester, String assessItemId) {
+        List<Map<String, Object>> assessItems = currentCourseAssessItems(courseId, semester);
+        if (StringUtils.hasText(assessItemId)) {
+            assessItems = assessItems.stream()
+                .filter(item -> String.valueOf(item.get("id")).equals(assessItemId))
+                .toList();
+        }
+        ensureDefaultAssessContents(assessItems);
+        return activeAssessContents(assessItems.stream().map(item -> longValue(item.get("id"))).toList()).stream()
+            .map(content -> map(
+                "columnKey", longValue(content.get("assessItemId")) + ":" + longValue(content.get("id")),
+                "assessItemId", content.get("assessItemId"),
+                "assessContentId", content.get("id"),
+                "assessItemName", content.get("contentName"),
+                "parentAssessItemName", content.get("assessItemName"),
+                "contentNo", content.get("contentNo"),
+                "contentType", content.get("contentType"),
+                "contentTypeName", content.get("contentTypeName"),
+                "maxScore", content.get("weight")
+            ))
+            .toList();
+    }
+
+    private List<Map<String, Object>> buildCombinedGradeManageRows(
+        List<Map<String, Object>> componentItems,
+        List<Map<String, Object>> componentColumns,
+        List<Map<String, Object>> summaryRows,
+        List<Map<String, Object>> summaryColumns
+    ) {
+        Map<String, Map<String, Object>> baseRows = new LinkedHashMap<>();
+        for (Map<String, Object> row : summaryRows) {
+            String key = defaultString(row.get("studentNo"), "") + "|" + defaultString(row.get("studentName"), "");
+            baseRows.put(key, new LinkedHashMap<>(row));
+        }
+        for (Map<String, Object> item : componentItems) {
+            String key = defaultString(item.get("studentNo"), "") + "|" + defaultString(item.get("studentName"), "");
+            baseRows.computeIfAbsent(key, ignored -> map(
+                "studentNo", item.get("studentNo"),
+                "studentName", item.get("studentName"),
+                "valid", true,
+                "errorMsg", "有效"
+            ));
+        }
+
+        Map<String, List<Map<String, Object>>> componentsByStudent = componentItems.stream()
+            .collect(Collectors.groupingBy(
+                item -> defaultString(item.get("studentNo"), "") + "|" + defaultString(item.get("studentName"), ""),
+                LinkedHashMap::new,
+                Collectors.toCollection(ArrayList::new)
+            ));
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        int rowIndex = 1;
+        for (Map.Entry<String, Map<String, Object>> entry : baseRows.entrySet()) {
+            Map<String, Object> row = entry.getValue();
+            List<Map<String, Object>> summaryCells = listOfMap(row.get("cells"));
+            if (summaryCells.isEmpty()) {
+                summaryCells = summaryColumns.stream().map(column -> map(
+                    "columnKey", defaultString(column.get("columnKey"), longValue(column.get("assessItemId")) + ":0"),
+                    "gradeId", null,
+                    "assessItemId", column.get("assessItemId"),
+                    "assessContentId", null,
+                    "assessItemName", column.get("assessItemName"),
+                    "parentAssessItemName", column.get("parentAssessItemName"),
+                    "score", "",
+                    "maxScore", column.get("maxScore"),
+                    "valid", true,
+                    "errorMsg", "有效"
+                )).toList();
+            }
+
+            Map<String, Map<String, Object>> componentByColumn = new LinkedHashMap<>();
+            for (Map<String, Object> item : componentsByStudent.getOrDefault(entry.getKey(), List.of())) {
+                componentByColumn.put(gradeColumnKey(item), item);
+            }
+            List<Map<String, Object>> componentCells = new ArrayList<>();
+            for (Map<String, Object> column : componentColumns) {
+                String columnKey = defaultString(column.get("columnKey"), "");
+                Map<String, Object> item = componentByColumn.get(columnKey);
+                componentCells.add(map(
+                    "columnKey", columnKey,
+                    "gradeId", item == null ? null : item.get("gradeId"),
+                    "assessItemId", column.get("assessItemId"),
+                    "assessContentId", column.get("assessContentId"),
+                    "assessItemName", column.get("assessItemName"),
+                    "parentAssessItemName", column.get("parentAssessItemName"),
+                    "contentType", column.get("contentType"),
+                    "contentTypeName", column.get("contentTypeName"),
+                    "score", item == null ? "" : item.get("score"),
+                    "maxScore", item == null ? column.get("maxScore") : item.get("maxScore"),
+                    "valid", true,
+                    "errorMsg", "有效"
+                ));
+            }
+
+            double totalScore = summaryCells.stream().mapToDouble(cell -> defaultDouble(cell.get("score"), 0D)).sum();
+            row.put("row", rowIndex++);
+            row.put("cells", summaryCells);
+            row.put("summaryCells", summaryCells);
+            row.put("componentCells", componentCells);
+            row.put("totalScore", round2(totalScore));
+            row.put("gradeLevel", gradeLevel(totalScore));
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private String gradeLevel(double score) {
+        if (score >= 90D) return "优";
+        if (score >= 80D) return "良";
+        if (score >= 70D) return "中等";
+        if (score >= 60D) return "及格";
+        return "不及格";
+    }
+
     private Long findConfirmedGradeId(long courseId, long semesterId, long assessItemId, String studentNo) {
         return jdbcTemplate.query("""
             SELECT sg.id
@@ -1605,6 +1966,7 @@ public class InMemoryCoaService {
               AND sg.course_id = :courseId
               AND sg.semester_id = :semesterId
               AND sg.assess_item_id = :assessItemId
+              AND sg.assess_content_id IS NULL
               AND sg.student_no = :studentNo
             ORDER BY sg.id DESC
             LIMIT 1
@@ -1612,6 +1974,28 @@ public class InMemoryCoaService {
             .addValue("courseId", courseId)
             .addValue("semesterId", semesterId)
             .addValue("assessItemId", assessItemId)
+            .addValue("studentNo", studentNo), rs -> rs.next() ? rs.getLong("id") : null);
+    }
+
+    private Long findConfirmedComponentGradeId(long courseId, long semesterId, long assessItemId, long assessContentId, String studentNo) {
+        return jdbcTemplate.query("""
+            SELECT sg.id
+            FROM student_grade sg
+            JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
+            WHERE gb.status = 'CONFIRMED'
+              AND sg.valid_flag = 1
+              AND sg.course_id = :courseId
+              AND sg.semester_id = :semesterId
+              AND sg.assess_item_id = :assessItemId
+              AND sg.assess_content_id = :assessContentId
+              AND sg.student_no = :studentNo
+            ORDER BY sg.id DESC
+            LIMIT 1
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId)
+            .addValue("assessItemId", assessItemId)
+            .addValue("assessContentId", assessContentId)
             .addValue("studentNo", studentNo), rs -> rs.next() ? rs.getLong("id") : null);
     }
 
@@ -1688,7 +2072,7 @@ public class InMemoryCoaService {
 
     private void markDuplicateGradeRows(long batchId, long courseId, long semesterId) {
         List<Map<String, Object>> batchRows = jdbcTemplate.query("""
-            SELECT id, student_no, assess_item_id
+            SELECT id, student_no, assess_item_id, assess_content_id
             FROM student_grade
             WHERE import_batch_id = :batchId
               AND valid_flag = 1
@@ -1696,12 +2080,13 @@ public class InMemoryCoaService {
             """, params("batchId", batchId), (rs, rowNum) -> map(
             "id", rs.getLong("id"),
             "studentNo", rs.getString("student_no"),
-            "assessItemId", rs.getLong("assess_item_id")
+            "assessItemId", rs.getLong("assess_item_id"),
+            "assessContentId", nullableLong(rs.getObject("assess_content_id"))
         ));
         if (batchRows.isEmpty()) return;
 
         Set<String> confirmedKeys = new java.util.HashSet<>(jdbcTemplate.query("""
-            SELECT sg.student_no, sg.assess_item_id
+            SELECT sg.student_no, sg.assess_item_id, sg.assess_content_id
             FROM student_grade sg
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.course_id = :courseId
@@ -1711,12 +2096,16 @@ public class InMemoryCoaService {
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
             .addValue("semesterId", semesterId),
-            (rs, rowNum) -> rs.getString("student_no") + "|" + rs.getLong("assess_item_id")
+            (rs, rowNum) -> rs.getString("student_no")
+                + "|" + rs.getLong("assess_item_id")
+                + "|" + defaultString(nullableLong(rs.getObject("assess_content_id")), "0")
         ));
 
         Set<String> seenInBatch = new java.util.HashSet<>();
         for (Map<String, Object> row : batchRows) {
-            String key = defaultString(row.get("studentNo"), "") + "|" + longValue(row.get("assessItemId"));
+            String key = defaultString(row.get("studentNo"), "")
+                + "|" + longValue(row.get("assessItemId"))
+                + "|" + defaultString(row.get("assessContentId"), "0");
             boolean isDuplicate = confirmedKeys.contains(key) || !seenInBatch.add(key);
             if (isDuplicate) {
                 jdbcTemplate.update("""
@@ -1727,6 +2116,131 @@ public class InMemoryCoaService {
                     WHERE id = :id
                     """, params("id", longValue(row.get("id"))));
             }
+        }
+    }
+
+    private void syncAggregatedGradesForBatch(long batchId) {
+        List<Map<String, Object>> affectedRows = jdbcTemplate.query("""
+            SELECT DISTINCT
+                sg.course_id,
+                sg.class_id,
+                sg.student_id,
+                sg.assess_item_id,
+                sg.semester_id,
+                sg.student_no,
+                sg.student_name,
+                sg.created_by
+            FROM student_grade sg
+            WHERE sg.import_batch_id = :batchId
+              AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NOT NULL
+            """, params("batchId", batchId), (rs, rowNum) -> map(
+            "courseId", rs.getLong("course_id"),
+            "classId", nullableLong(rs.getObject("class_id")),
+            "studentId", nullableLong(rs.getObject("student_id")),
+            "assessItemId", rs.getLong("assess_item_id"),
+            "semesterId", rs.getLong("semester_id"),
+            "studentNo", rs.getString("student_no"),
+            "studentName", rs.getString("student_name"),
+            "createdBy", nullableLong(rs.getObject("created_by"))
+        ));
+        for (Map<String, Object> row : affectedRows) {
+            syncAggregatedGrade(
+                longValue(row.get("courseId")),
+                nullableLong(row.get("classId")),
+                nullableLong(row.get("studentId")),
+                longValue(row.get("assessItemId")),
+                longValue(row.get("semesterId")),
+                batchId,
+                defaultString(row.get("studentNo"), ""),
+                defaultString(row.get("studentName"), ""),
+                nullableLong(row.get("createdBy"))
+            );
+        }
+    }
+
+    private void syncAggregatedGrade(
+        long courseId,
+        Long classId,
+        Long studentId,
+        long assessItemId,
+        long semesterId,
+        long batchId,
+        String studentNo,
+        String studentName,
+        Long createdBy
+    ) {
+        if (!StringUtils.hasText(studentNo)) {
+            return;
+        }
+        Map<String, Object> totals = requireMap("""
+            SELECT
+                COALESCE(SUM(sg.score), 0) AS score,
+                COALESCE(SUM(sg.max_score), 0) AS max_score
+            FROM student_grade sg
+            JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
+            WHERE gb.status = 'CONFIRMED'
+              AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NOT NULL
+              AND sg.course_id = :courseId
+              AND sg.semester_id = :semesterId
+              AND sg.assess_item_id = :assessItemId
+              AND sg.student_no = :studentNo
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId)
+            .addValue("assessItemId", assessItemId)
+            .addValue("studentNo", studentNo));
+        double score = round2(doubleValue(totals.get("score")));
+        double maxScore = round2(queryDouble("""
+            SELECT weight
+            FROM assess_item
+            WHERE id = :assessItemId
+            """, params("assessItemId", assessItemId)));
+        if (maxScore <= 0D) {
+            maxScore = round2(doubleValue(totals.get("max_score")));
+        }
+        Long existingId = findConfirmedGradeId(courseId, semesterId, assessItemId, studentNo);
+        if (existingId == null) {
+            jdbcTemplate.update("""
+                INSERT INTO student_grade (
+                    course_id, class_id, student_id, assess_item_id, assess_content_id, semester_id, import_batch_id,
+                    student_no, student_name, score, max_score, valid_flag, error_message, created_by
+                ) VALUES (
+                    :courseId, :classId, :studentId, :assessItemId, NULL, :semesterId, :batchId,
+                    :studentNo, :studentName, :score, :maxScore, 1, NULL, :createdBy
+                )
+                """, new MapSqlParameterSource()
+                .addValue("courseId", courseId)
+                .addValue("classId", classId)
+                .addValue("studentId", studentId)
+                .addValue("assessItemId", assessItemId)
+                .addValue("semesterId", semesterId)
+                .addValue("batchId", batchId)
+                .addValue("studentNo", studentNo)
+                .addValue("studentName", studentName)
+                .addValue("score", score)
+                .addValue("maxScore", maxScore)
+                .addValue("createdBy", createdBy));
+        } else {
+            jdbcTemplate.update("""
+                UPDATE student_grade
+                SET class_id = COALESCE(:classId, class_id),
+                    student_id = COALESCE(:studentId, student_id),
+                    student_name = :studentName,
+                    score = :score,
+                    max_score = :maxScore,
+                    valid_flag = 1,
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE id = :id
+                """, new MapSqlParameterSource()
+                .addValue("id", existingId)
+                .addValue("classId", classId)
+                .addValue("studentId", studentId)
+                .addValue("studentName", studentName)
+                .addValue("score", score)
+                .addValue("maxScore", maxScore));
         }
     }
 
@@ -1742,6 +2256,7 @@ public class InMemoryCoaService {
             SET status = 'CONFIRMED', confirmed_at = NOW(), updated_at = NOW()
             WHERE id = :id
             """, params("id", id));
+        syncAggregatedGradesForBatch(id);
         return map(
             "success", true,
             "importedCount", intValue(batch.get("valid_rows")),
@@ -1788,6 +2303,7 @@ public class InMemoryCoaService {
             LEFT JOIN base_class bc ON bc.id = sg.class_id
             WHERE gb.status = 'CONFIRMED'
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND sg.course_id = :courseId
               AND sg.semester_id = :semesterId
             """);
@@ -1819,20 +2335,34 @@ public class InMemoryCoaService {
         ));
 
         List<Map<String, Object>> columns = gradeManageColumns(courseId, semester, assessItemId, items);
-        List<Map<String, Object>> rows = buildGradeManageRows(items.stream().map(item -> map(
+        List<Map<String, Object>> summaryRows = buildGradeManageRows(items.stream().map(item -> map(
             "row", 0,
             "gradeId", item.get("id"),
             "studentId", item.get("studentNo"),
             "name", item.get("studentName"),
             "assessItemId", item.get("assessItemId"),
+            "assessContentId", null,
             "assessItemName", item.get("itemName"),
+            "parentAssessItemName", item.get("itemName"),
             "score", item.get("score"),
             "maxScore", item.get("maxScore"),
             "valid", true,
             "errorMsg", "有效"
         )).toList(), columns);
 
-        return map("items", items, "columns", columns, "rows", rows, "total", rows.size());
+        List<Map<String, Object>> componentItems = queryImportedGradeComponents(courseId, semesterId, assessItemId, classId, keyword);
+        List<Map<String, Object>> componentColumns = gradeComponentManageColumns(courseId, semester, assessItemId);
+        List<Map<String, Object>> rows = buildCombinedGradeManageRows(componentItems, componentColumns, summaryRows, columns);
+
+        return map(
+            "items", items,
+            "componentItems", componentItems,
+            "columns", columns,
+            "summaryColumns", columns,
+            "componentColumns", componentColumns,
+            "rows", rows,
+            "total", rows.size()
+        );
     }
 
     public Map<String, Object> saveImportedGradeRow(Map<String, Object> payload) {
@@ -1857,6 +2387,80 @@ public class InMemoryCoaService {
         Long resolvedClassId = classId != null ? classId : findStudentClassId(studentNo);
 
         long batchId = ensureManualGradeBatch(courseId, semesterId, teacherId);
+        List<Map<String, Object>> componentCells = listOfMap(payload.get("componentCells"));
+        if (!componentCells.isEmpty()) {
+            Set<Long> affectedAssessItems = new LinkedHashSet<>();
+            for (Map<String, Object> cell : componentCells) {
+                long assessItemId = longValue(cell.get("assessItemId"));
+                Long assessContentId = nullableLong(cell.get("assessContentId"));
+                if (assessContentId == null) {
+                    continue;
+                }
+                double maxScore = defaultDouble(cell.get("maxScore"), 100D);
+                ScoreParseResult score = parseComponentScore(defaultString(cell.get("score"), ""), 0D, maxScore);
+                if (!score.valid()) {
+                    throw new ApiException(UNPROCESSABLE_STATUS, 400, defaultString(cell.get("assessItemName"), "成绩") + "：" + score.errorMessage());
+                }
+                Long gradeId = nullableLong(cell.get("gradeId"));
+                if (gradeId == null) {
+                    gradeId = findConfirmedComponentGradeId(courseId, semesterId, assessItemId, assessContentId, studentNo);
+                }
+                if (gradeId == null) {
+                    jdbcTemplate.update("""
+                        INSERT INTO student_grade (
+                            course_id, class_id, student_id, assess_item_id, assess_content_id, semester_id, import_batch_id, student_no, student_name,
+                            score, max_score, valid_flag, error_message, created_by
+                        ) VALUES (
+                            :courseId, :classId, :studentId, :assessItemId, :assessContentId, :semesterId, :batchId, :studentNo, :studentName,
+                            :score, :maxScore, 1, NULL, :createdBy
+                        )
+                        """, new MapSqlParameterSource()
+                        .addValue("courseId", courseId)
+                        .addValue("classId", resolvedClassId)
+                        .addValue("studentId", studentId)
+                        .addValue("assessItemId", assessItemId)
+                        .addValue("assessContentId", assessContentId)
+                        .addValue("semesterId", semesterId)
+                        .addValue("batchId", batchId)
+                        .addValue("studentNo", studentNo)
+                        .addValue("studentName", studentName)
+                        .addValue("score", round2(score.score()))
+                        .addValue("maxScore", round2(maxScore))
+                        .addValue("createdBy", teacherId));
+                } else {
+                    jdbcTemplate.update("""
+                        UPDATE student_grade
+                        SET student_no = :studentNo,
+                            student_name = :studentName,
+                            class_id = :classId,
+                            student_id = :studentId,
+                            score = :score,
+                            max_score = :maxScore,
+                            valid_flag = 1,
+                            error_message = NULL,
+                            updated_at = NOW()
+                        WHERE id = :id
+                          AND course_id = :courseId
+                          AND semester_id = :semesterId
+                        """, new MapSqlParameterSource()
+                        .addValue("id", gradeId)
+                        .addValue("courseId", courseId)
+                        .addValue("semesterId", semesterId)
+                        .addValue("studentNo", studentNo)
+                        .addValue("studentName", studentName)
+                        .addValue("classId", resolvedClassId)
+                        .addValue("studentId", studentId)
+                        .addValue("score", round2(score.score()))
+                        .addValue("maxScore", round2(maxScore)));
+                }
+                affectedAssessItems.add(assessItemId);
+            }
+            for (Long assessItemId : affectedAssessItems) {
+                syncAggregatedGrade(courseId, resolvedClassId, studentId, assessItemId, semesterId, batchId, studentNo, studentName, teacherId);
+            }
+            refreshGradeBatchCounts(batchId);
+            return map("success", true);
+        }
         List<Map<String, Object>> cells = listOfMap(payload.get("cells"));
         for (Map<String, Object> cell : cells) {
             long assessItemId = longValue(cell.get("assessItemId"));
@@ -1876,10 +2480,10 @@ public class InMemoryCoaService {
             if (gradeId == null) {
                 jdbcTemplate.update("""
                     INSERT INTO student_grade (
-                        course_id, class_id, student_id, assess_item_id, semester_id, import_batch_id, student_no, student_name,
+                        course_id, class_id, student_id, assess_item_id, assess_content_id, semester_id, import_batch_id, student_no, student_name,
                         score, max_score, valid_flag, error_message, created_by
                     ) VALUES (
-                        :courseId, :classId, :studentId, :assessItemId, :semesterId, :batchId, :studentNo, :studentName,
+                        :courseId, :classId, :studentId, :assessItemId, NULL, :semesterId, :batchId, :studentNo, :studentName,
                         :score, :maxScore, 1, NULL, :createdBy
                     )
                     """, new MapSqlParameterSource()
@@ -3605,17 +4209,45 @@ public class InMemoryCoaService {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='班级开课表'
                 """);
             ensureColumn("grade_import_batch", "class_id", "BIGINT NULL");
+            ensureColumn("grade_import_batch", "assess_content_id", "BIGINT NULL");
             ensureColumn("student_grade", "class_id", "BIGINT NULL");
             ensureColumn("student_grade", "student_id", "BIGINT NULL");
+            ensureColumn("student_grade", "assess_content_id", "BIGINT NULL");
+            ensureAssessmentContentTable();
             ensureIndex("grade_import_batch", "idx_grade_import_class", List.of("class_id", "semester_id"));
+            ensureIndex("grade_import_batch", "idx_grade_import_content", List.of("assess_content_id"));
             ensureIndex("student_grade", "idx_student_grade_class", List.of("class_id", "semester_id"));
+            ensureIndex("student_grade", "idx_student_grade_content", List.of("assess_content_id"));
             ensureIndex("student_grade", "fk_student_grade_student", List.of("student_id"));
             ensureForeignKey("grade_import_batch", "fk_grade_import_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
+            ensureForeignKey("grade_import_batch", "fk_grade_import_content", "assess_content_id", "assess_content", "id", "ON DELETE SET NULL");
             ensureForeignKey("student_grade", "fk_student_grade_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
             ensureForeignKey("student_grade", "fk_student_grade_student", "student_id", "base_student", "id", "ON DELETE SET NULL");
+            ensureForeignKey("student_grade", "fk_student_grade_content", "assess_content_id", "assess_content", "id", "ON DELETE SET NULL");
         } catch (Exception e) {
             log.warn("Schema migration failed for collect tables: {}", e.getMessage());
         }
+    }
+
+    private void ensureAssessmentContentTable() {
+        plainJdbcTemplate.execute("""
+            CREATE TABLE IF NOT EXISTS assess_content (
+                id BIGINT NOT NULL AUTO_INCREMENT,
+                assess_item_id BIGINT NOT NULL,
+                content_no VARCHAR(20) NOT NULL,
+                content_name VARCHAR(120) NOT NULL,
+                content_type VARCHAR(20) NOT NULL DEFAULT 'assignment',
+                weight DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+                sort_order INT NOT NULL DEFAULT 0,
+                status TINYINT NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uk_assess_content_no (assess_item_id, content_no),
+                KEY idx_assess_content_item (assess_item_id, status, sort_order),
+                CONSTRAINT fk_assess_content_item FOREIGN KEY (assess_item_id) REFERENCES assess_item (id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='考核内容及方式表'
+            """);
     }
 
     private void ensureCourseTeachingContentTable() {
@@ -4779,17 +5411,20 @@ public class InMemoryCoaService {
 
     private List<Map<String, Object>> assessItemListByOutline(long outlineId) {
         return jdbcTemplate.query("""
-            SELECT id, item_name, item_type, weight, max_score
+            SELECT id, item_name, item_type, weight, max_score, sort_order
             FROM assess_item
             WHERE outline_id = :outlineId
+              AND sort_order < 1000
             ORDER BY sort_order ASC, id ASC
             """, params("outlineId", outlineId), (rs, rowNum) -> map(
             "id", rs.getLong("id"),
             "outlineId", outlineId,
             "itemName", rs.getString("item_name"),
             "itemType", defaultString(rs.getString("item_type"), ""),
+            "itemTypeName", assessItemTypeName(rs.getString("item_type")),
             "weight", rs.getBigDecimal("weight"),
-            "maxScore", rs.getBigDecimal("max_score")
+            "maxScore", rs.getBigDecimal("max_score"),
+            "sortOrder", rs.getInt("sort_order")
         ));
     }
 
@@ -5235,6 +5870,154 @@ public class InMemoryCoaService {
         return assessItemListByOutline(outlineId);
     }
 
+    private void ensureDefaultAssessContents(List<Map<String, Object>> assessItems) {
+        for (Map<String, Object> item : assessItems) {
+            long assessItemId = longValue(item.get("id"));
+            long count = count("""
+                SELECT COUNT(*)
+                FROM assess_content
+                WHERE assess_item_id = :assessItemId
+                  AND status = 1
+                """, params("assessItemId", assessItemId));
+            if (count > 0) {
+                continue;
+            }
+            jdbcTemplate.update("""
+                INSERT INTO assess_content (
+                    assess_item_id, content_no, content_name, content_type, weight, sort_order, status
+                ) VALUES (
+                    :assessItemId, '1', :contentName, :contentType, :weight, :sortOrder, 1
+                )
+                ON DUPLICATE KEY UPDATE
+                    content_name = VALUES(content_name),
+                    content_type = VALUES(content_type),
+                    weight = VALUES(weight),
+                    sort_order = VALUES(sort_order),
+                    status = 1,
+                    updated_at = NOW()
+                """, new MapSqlParameterSource()
+                .addValue("assessItemId", assessItemId)
+                .addValue("contentName", defaultString(item.get("itemName"), "考核内容"))
+                .addValue("contentType", inferAssessContentType(item))
+                .addValue("weight", round2(doubleValue(item.get("weight"))))
+                .addValue("sortOrder", defaultInt(item.get("sortOrder"), 0)));
+        }
+    }
+
+    private List<Map<String, Object>> activeAssessContents(List<Long> assessItemIds) {
+        if (assessItemIds == null || assessItemIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbcTemplate.query("""
+            SELECT
+                ac.id,
+                ac.assess_item_id,
+                ai.item_name,
+                ai.weight AS assess_item_weight,
+                ac.content_no,
+                ac.content_name,
+                ac.content_type,
+                ac.weight,
+                ac.sort_order
+            FROM assess_content ac
+            JOIN assess_item ai ON ai.id = ac.assess_item_id
+            WHERE ac.status = 1
+              AND ac.assess_item_id IN (:assessItemIds)
+            ORDER BY ai.sort_order ASC, ai.id ASC, ac.sort_order ASC, ac.id ASC
+            """, new MapSqlParameterSource("assessItemIds", assessItemIds), (rs, rowNum) -> map(
+            "id", rs.getLong("id"),
+            "assessItemId", rs.getLong("assess_item_id"),
+            "assessItemName", rs.getString("item_name"),
+            "assessItemWeight", rs.getBigDecimal("assess_item_weight"),
+            "contentNo", rs.getString("content_no"),
+            "contentName", rs.getString("content_name"),
+            "contentType", rs.getString("content_type"),
+            "contentTypeName", assessContentTypeName(rs.getString("content_type")),
+            "weight", rs.getBigDecimal("weight"),
+            "maxScore", rs.getBigDecimal("weight"),
+            "sortOrder", rs.getInt("sort_order")
+        ));
+    }
+
+    private List<Map<String, Object>> activeAssessContentsByItem(long assessItemId) {
+        return activeAssessContents(List.of(assessItemId));
+    }
+
+    private List<String> assessmentContentWarnings(List<Map<String, Object>> assessItems) {
+        List<String> warnings = new ArrayList<>();
+        for (Map<String, Object> item : assessItems) {
+            double expected = round2(doubleValue(item.get("weight")));
+            double actual = round2(doubleValue(item.get("contentWeight")));
+            if (expected > 0D && Math.abs(expected - actual) > 0.01D) {
+                warnings.add(defaultString(item.get("itemName"), "考核项") + "的内容权重合计为 "
+                    + formatNumber(actual, 2) + "，应为 " + formatNumber(expected, 2) + "。");
+            }
+        }
+        return warnings;
+    }
+
+    private void retireRemovedAssessContents(Set<Long> assessItemIds, Set<Long> keepIds) {
+        if (assessItemIds == null || assessItemIds.isEmpty()) {
+            return;
+        }
+        List<Long> existingIds = jdbcTemplate.query("""
+            SELECT id
+            FROM assess_content
+            WHERE assess_item_id IN (:assessItemIds)
+              AND status = 1
+            """, new MapSqlParameterSource("assessItemIds", assessItemIds), (rs, rowNum) -> rs.getLong("id"));
+        for (Long id : existingIds) {
+            if (keepIds.contains(id)) {
+                continue;
+            }
+            long referenced = count("""
+                SELECT
+                    (SELECT COUNT(*) FROM student_grade WHERE assess_content_id = :id)
+                  + (SELECT COUNT(*) FROM grade_import_batch WHERE assess_content_id = :id)
+                """, params("id", id));
+            if (referenced > 0) {
+                jdbcTemplate.update("""
+                    UPDATE assess_content
+                    SET status = 0,
+                        updated_at = NOW()
+                    WHERE id = :id
+                    """, params("id", id));
+            } else {
+                jdbcTemplate.update("DELETE FROM assess_content WHERE id = :id", params("id", id));
+            }
+        }
+    }
+
+    private String normalizeAssessContentType(String type) {
+        String value = defaultString(type, "").trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "experiment", "practice", "lab" -> "experiment";
+            case "exam", "final", "test" -> "exam";
+            default -> "assignment";
+        };
+    }
+
+    private String inferAssessContentType(Map<String, Object> assessItem) {
+        String type = defaultString(assessItem.get("itemType"), "");
+        String name = defaultString(assessItem.get("itemName"), "");
+        String normalized = normalizeGradeHeader(type + name);
+        if (containsAnyNormalized(normalized, List.of("实验", "实践", "上机", "项目", "practice", "lab"))) {
+            return "experiment";
+        }
+        if (containsAnyNormalized(normalized, List.of("期末", "考试", "测试", "综合报告", "final", "exam", "test"))) {
+            return "exam";
+        }
+        return "assignment";
+    }
+
+    private String assessContentTypeName(String type) {
+        return switch (normalizeAssessContentType(type)) {
+            case "experiment" -> "实验";
+            case "exam" -> "考核";
+            default -> "作业";
+        };
+    }
+
     private GradeImportResult parseGradeFile(
         MultipartFile file,
         String fileName,
@@ -5277,8 +6060,64 @@ public class InMemoryCoaService {
                     studentNo,
                     studentName,
                     column.assessItemId(),
+                    null,
                     score.score(),
                     column.maxScore(),
+                    !StringUtils.hasText(error),
+                    error
+                ));
+            }
+        }
+
+        int validRows = (int) imports.stream().filter(GradeImportRow::valid).count();
+        return new GradeImportResult(imports, imports.size(), validRows, imports.size() - validRows);
+    }
+
+    private GradeImportResult parseGradeContentFile(
+        MultipartFile file,
+        String fileName,
+        List<Map<String, Object>> contents
+    ) throws IOException {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        List<List<String>> rows = lower.endsWith(".csv") ? readCsvRows(file) : readWorkbookRowsForContents(file, contents);
+        if (rows.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "成绩文件为空，请检查表头和数据行。");
+        }
+
+        List<String> headers = rows.get(0);
+        Map<Integer, GradeContentColumn> gradeColumns = resolveGradeContentColumns(headers, contents);
+        if (gradeColumns.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "未在成绩文件中找到与考核内容匹配的成绩列。");
+        }
+
+        List<GradeImportRow> imports = new ArrayList<>();
+        for (int rowIndex = 1; rowIndex < rows.size(); rowIndex++) {
+            List<String> row = rows.get(rowIndex);
+            if (row.stream().allMatch(cell -> !StringUtils.hasText(cell))) {
+                continue;
+            }
+            String studentNo = cellAt(row, 0);
+            String studentName = cellAt(row, 1);
+            for (Map.Entry<Integer, GradeContentColumn> entry : gradeColumns.entrySet()) {
+                GradeContentColumn column = entry.getValue();
+                String rawScore = cellAt(row, entry.getKey());
+                ScoreParseResult score = parseComponentScore(rawScore, column.inputMaxScore(), column.weight());
+                String error = "";
+                if (!StringUtils.hasText(studentNo)) {
+                    error = "学号不能为空";
+                } else if (!StringUtils.hasText(studentName)) {
+                    error = "姓名不能为空";
+                } else if (!score.valid()) {
+                    error = score.errorMessage();
+                }
+                imports.add(new GradeImportRow(
+                    rowIndex + 1,
+                    studentNo,
+                    studentName,
+                    column.assessItemId(),
+                    column.assessContentId(),
+                    score.score(),
+                    column.weight(),
                     !StringUtils.hasText(error),
                     error
                 ));
@@ -5438,6 +6277,30 @@ public class InMemoryCoaService {
         }
     }
 
+    private List<List<String>> readWorkbookRowsForContents(MultipartFile file, List<Map<String, Object>> contents) throws IOException {
+        DataFormatter formatter = new DataFormatter(Locale.ROOT);
+        try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
+            SheetSelection best = null;
+            for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
+                Sheet sheet = workbook.getSheetAt(sheetIndex);
+                List<List<String>> rows = readSheetRows(sheet, formatter);
+                SheetSelection selection = selectGradeContentSheet(sheet.getSheetName(), rows, contents);
+                if (selection == null) {
+                    continue;
+                }
+                if (best == null || selection.score() > best.score()) {
+                    best = selection;
+                }
+            }
+            if (best != null) {
+                return best.rows().subList(best.headerIndex(), best.rows().size());
+            }
+            return workbook.getNumberOfSheets() == 0
+                ? List.of()
+                : readSheetRows(workbook.getSheetAt(0), formatter);
+        }
+    }
+
     private List<List<String>> readSheetRows(Sheet sheet, DataFormatter formatter) {
         List<List<String>> rows = new ArrayList<>();
         for (Row row : sheet) {
@@ -5477,6 +6340,46 @@ public class InMemoryCoaService {
             if (normalizedSheet.contains("学生成绩")) {
                 score += 120;
             } else if (normalizedSheet.contains("成绩")) {
+                score += 60;
+            }
+            long nonEmptyDataRows = rows.stream()
+                .skip(rowIndex + 1L)
+                .filter(row -> row.stream().anyMatch(StringUtils::hasText))
+                .count();
+            score += (int) Math.min(nonEmptyDataRows, 50);
+            SheetSelection current = new SheetSelection(sheetName, rows, rowIndex, score);
+            if (best == null || current.score() > best.score()) {
+                best = current;
+            }
+        }
+        return best;
+    }
+
+    private SheetSelection selectGradeContentSheet(String sheetName, List<List<String>> rows, List<Map<String, Object>> contents) {
+        SheetSelection best = null;
+        int inspectRows = Math.min(rows.size(), 20);
+        for (int rowIndex = 0; rowIndex < inspectRows; rowIndex++) {
+            List<String> header = rows.get(rowIndex);
+            if (header.isEmpty()) {
+                continue;
+            }
+            Map<Integer, GradeContentColumn> columns = resolveGradeContentColumns(header, contents);
+            if (columns.isEmpty()) {
+                continue;
+            }
+            String first = normalizeGradeHeader(cellAt(header, 0));
+            String second = normalizeGradeHeader(cellAt(header, 1));
+            int score = columns.values().stream().mapToInt(GradeContentColumn::quality).sum() + columns.size() * 20;
+            if (first.contains("学号") || first.contains("工号")) {
+                score += 80;
+            }
+            if (second.contains("姓名") || second.contains("学生")) {
+                score += 60;
+            }
+            String normalizedSheet = normalizeGradeHeader(sheetName);
+            if (normalizedSheet.contains("学生成绩")) {
+                score += 100;
+            } else if (normalizedSheet.contains("成绩") || normalizedSheet.contains("作业") || normalizedSheet.contains("实验") || normalizedSheet.contains("试卷")) {
                 score += 60;
             }
             long nonEmptyDataRows = rows.stream()
@@ -5560,6 +6463,69 @@ public class InMemoryCoaService {
             ));
     }
 
+    private Map<Integer, GradeContentColumn> resolveGradeContentColumns(List<String> headers, List<Map<String, Object>> contents) {
+        Map<Long, GradeContentColumn> bestByContent = new LinkedHashMap<>();
+        for (int index = 2; index < headers.size(); index++) {
+            String header = defaultString(headers.get(index), "");
+            GradeContentColumn matched = matchAssessContentByHeader(index, header, contents);
+            if (matched == null) {
+                continue;
+            }
+            GradeContentColumn existing = bestByContent.get(matched.assessContentId());
+            if (existing == null || matched.quality() > existing.quality()) {
+                bestByContent.put(matched.assessContentId(), matched);
+            }
+        }
+        if (bestByContent.isEmpty()) {
+            int count = Math.min(Math.max(headers.size() - 2, 0), contents.size());
+            for (int offset = 0; offset < count; offset++) {
+                Map<String, Object> content = contents.get(offset);
+                int index = offset + 2;
+                double inputMaxScore = defaultDouble(extractExplicitMaxScore(cellAt(headers, index)), 100D);
+                bestByContent.put(longValue(content.get("id")), new GradeContentColumn(
+                    index,
+                    longValue(content.get("assessItemId")),
+                    longValue(content.get("id")),
+                    inputMaxScore,
+                    Math.max(doubleValue(content.get("weight")), 0D),
+                    10
+                ));
+            }
+        }
+        return bestByContent.values().stream()
+            .sorted(Comparator.comparingInt(GradeContentColumn::index))
+            .collect(Collectors.toMap(
+                GradeContentColumn::index,
+                item -> item,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+    }
+
+    private GradeContentColumn matchAssessContentByHeader(int index, String header, List<Map<String, Object>> contents) {
+        int bestQuality = 0;
+        Map<String, Object> best = null;
+        for (Map<String, Object> content : contents) {
+            int quality = gradeContentHeaderMatchQuality(header, content);
+            if (quality > bestQuality) {
+                bestQuality = quality;
+                best = content;
+            }
+        }
+        if (best == null || bestQuality <= 0) {
+            return null;
+        }
+        double inputMaxScore = defaultDouble(extractExplicitMaxScore(header), 0D);
+        return new GradeContentColumn(
+            index,
+            longValue(best.get("assessItemId")),
+            longValue(best.get("id")),
+            inputMaxScore,
+            Math.max(doubleValue(best.get("weight")), 0D),
+            bestQuality
+        );
+    }
+
     private Map<String, Object> matchAssessItemByHeader(String header, List<Map<String, Object>> assessItems) {
         String normalized = normalizeGradeHeader(header);
         for (Map<String, Object> item : assessItems) {
@@ -5626,6 +6592,63 @@ public class InMemoryCoaService {
         return quality;
     }
 
+    private int gradeContentHeaderMatchQuality(String header, Map<String, Object> content) {
+        String normalizedHeader = normalizeGradeHeader(header);
+        if (!StringUtils.hasText(normalizedHeader)) {
+            return 0;
+        }
+        String normalizedName = normalizeGradeHeader(stringValue(content.get("contentName")));
+        String normalizedType = normalizeGradeHeader(assessContentTypeName(stringValue(content.get("contentType"))));
+        List<String> ordinalTokens = contentOrdinalTokens(stringValue(content.get("contentNo")));
+        int quality = 0;
+        if (StringUtils.hasText(normalizedName)) {
+            if (normalizedHeader.equals(normalizedName)) {
+                quality += 300;
+            } else if (normalizedHeader.contains(normalizedName) || normalizedName.contains(normalizedHeader)) {
+                quality += 230;
+            }
+        }
+        for (String token : ordinalTokens) {
+            String normalizedToken = normalizeGradeHeader(token);
+            if (!StringUtils.hasText(normalizedToken)) {
+                continue;
+            }
+            boolean nameCarriesOrdinal = StringUtils.hasText(normalizedName) && normalizedName.contains(normalizedToken);
+            if (nameCarriesOrdinal && normalizedHeader.equals(normalizedToken)) {
+                quality += 140;
+            } else if (normalizedHeader.contains(normalizedType + normalizedToken)
+                || (nameCarriesOrdinal && normalizedHeader.contains(normalizedToken))
+                || (nameCarriesOrdinal && normalizedHeader.contains("第" + normalizedToken))) {
+                quality += 120;
+            }
+        }
+        if (StringUtils.hasText(normalizedType) && normalizedHeader.contains(normalizedType)) {
+            quality += 35;
+        }
+        if (extractExplicitMaxScore(header) != null) {
+            quality += 30;
+        }
+        return quality;
+    }
+
+    private List<String> contentOrdinalTokens(String value) {
+        String text = defaultString(value, "").trim();
+        List<String> tokens = new ArrayList<>();
+        if (StringUtils.hasText(text)) {
+            tokens.add(text);
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+").matcher(text);
+        if (matcher.find()) {
+            int number = Integer.parseInt(matcher.group());
+            tokens.add(String.valueOf(number));
+            if (number >= 1 && number <= 10) {
+                tokens.add(List.of("", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十").get(number));
+                tokens.add(List.of("", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩").get(number));
+            }
+        }
+        return tokens.stream().filter(StringUtils::hasText).distinct().toList();
+    }
+
     private double resolveMaxScore(String header, Map<String, Object> item) {
         Double explicitMaxScore = extractExplicitMaxScore(header);
         if (explicitMaxScore != null && explicitMaxScore > 0D) {
@@ -5672,6 +6695,39 @@ public class InMemoryCoaService {
         }
     }
 
+    private ScoreParseResult parseComponentScore(String rawValue, double inputMaxScore, double targetMaxScore) {
+        if (!StringUtils.hasText(rawValue)) {
+            return new ScoreParseResult(0D, false, "成绩不能为空");
+        }
+        double target = targetMaxScore > 0D ? targetMaxScore : 100D;
+        String normalized = rawValue.trim().replace("%", "").replace("％", "");
+        try {
+            double raw = Double.parseDouble(normalized);
+            if (raw < 0D) {
+                return new ScoreParseResult(raw, false, "成绩不能为负数");
+            }
+            double score;
+            if (inputMaxScore > 0D && Math.abs(inputMaxScore - target) > 0.000001D) {
+                if (raw > inputMaxScore) {
+                    return new ScoreParseResult(raw, false, "成绩超出 0-" + formatNumber(inputMaxScore, 2));
+                }
+                score = inputMaxScore > 0D ? raw / inputMaxScore * target : raw;
+            } else if (raw <= target) {
+                score = raw;
+            } else if (raw <= 100D && target < 100D) {
+                score = raw / 100D * target;
+            } else {
+                return new ScoreParseResult(raw, false, "成绩超出 0-" + formatNumber(target, 2));
+            }
+            if (score > target + 0.000001D) {
+                return new ScoreParseResult(score, false, "折算成绩超出 0-" + formatNumber(target, 2));
+            }
+            return new ScoreParseResult(round2(score), true, "");
+        } catch (NumberFormatException exception) {
+            return new ScoreParseResult(0D, false, "成绩不是有效数字");
+        }
+    }
+
     private void persistGradeImportRows(
         long batchId,
         long courseId,
@@ -5685,10 +6741,10 @@ public class InMemoryCoaService {
             Long resolvedClassId = classId != null ? classId : findStudentClassId(row.studentNo());
             jdbcTemplate.update("""
                 INSERT INTO student_grade (
-                    course_id, class_id, student_id, assess_item_id, semester_id, import_batch_id, student_no, student_name,
+                    course_id, class_id, student_id, assess_item_id, assess_content_id, semester_id, import_batch_id, student_no, student_name,
                     score, max_score, valid_flag, error_message, created_by
                 ) VALUES (
-                    :courseId, :classId, :studentId, :assessItemId, :semesterId, :batchId, :studentNo, :studentName,
+                    :courseId, :classId, :studentId, :assessItemId, :assessContentId, :semesterId, :batchId, :studentNo, :studentName,
                     :score, :maxScore, :validFlag, :errorMessage, :createdBy
                 )
                 """, new MapSqlParameterSource()
@@ -5696,6 +6752,7 @@ public class InMemoryCoaService {
                 .addValue("classId", resolvedClassId)
                 .addValue("studentId", studentId)
                 .addValue("assessItemId", row.assessItemId())
+                .addValue("assessContentId", row.assessContentId())
                 .addValue("semesterId", semesterId)
                 .addValue("batchId", batchId)
                 .addValue("studentNo", row.studentNo())
@@ -5766,6 +6823,7 @@ public class InMemoryCoaService {
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
               AND sg.assess_item_id IN (
                   SELECT id FROM assess_item WHERE outline_id = :outlineId
@@ -5908,6 +6966,7 @@ public class InMemoryCoaService {
             WHERE sg.course_id = :courseId
               AND sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
@@ -5918,6 +6977,7 @@ public class InMemoryCoaService {
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.course_id = :courseId
               AND sg.semester_id = :semesterId
+              AND sg.assess_content_id IS NULL
               AND gb.status <> 'CONFIRMED'
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
@@ -6135,6 +7195,7 @@ public class InMemoryCoaService {
                 ON sg.assess_item_id = ai.id
                AND sg.course_id = :courseId
                AND sg.semester_id = :semesterId
+               AND sg.assess_content_id IS NULL
             LEFT JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE ai.outline_id = :outlineId
             GROUP BY ai.id, ai.item_name, ai.item_type, ai.weight, ai.sort_order
@@ -6754,6 +7815,9 @@ public class InMemoryCoaService {
     private record GradeColumnCandidate(int index, long assessItemId, double maxScore, int quality) {
     }
 
+    private record GradeContentColumn(int index, long assessItemId, long assessContentId, double inputMaxScore, double weight, int quality) {
+    }
+
     private record SheetSelection(String sheetName, List<List<String>> rows, int headerIndex, int score) {
     }
 
@@ -6765,6 +7829,7 @@ public class InMemoryCoaService {
         String studentNo,
         String studentName,
         long assessItemId,
+        Long assessContentId,
         double score,
         double maxScore,
         boolean valid,

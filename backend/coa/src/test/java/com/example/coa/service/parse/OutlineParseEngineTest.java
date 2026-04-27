@@ -67,6 +67,11 @@ class OutlineParseEngineTest {
                 && "课程目标1".equals(standard.objective())
                 && standard.excellent().contains("基本概念正确")
                 && "50".equals(standard.scorePercent())));
+        assertTrue(parsed.courseInfo().teachingContents().stream()
+            .anyMatch(item -> item.title().startsWith("实验一")
+                && item.requirements().contains("熟悉Web应用程序开发环境")
+                && Integer.valueOf(2).equals(item.practiceHours())),
+            () -> parsed.courseInfo().teachingContents().toString());
     }
 
     private byte[] buildRepresentativeSyllabus() throws Exception {
@@ -97,6 +102,11 @@ class OutlineParseEngineTest {
             paragraph(doc, "（重点覆盖课程目标1）");
             paragraph(doc, "1. 基本要求");
             paragraph(doc, "（1）理解信息系统相关技术概要。");
+            paragraph(doc, "2. 重点、难点");
+            paragraph(doc, "信息系统基本概念。");
+            paragraph(doc, "（二）课程实验");
+            paragraph(doc, "实验一：Web应用程序开发环境熟悉（2学时）");
+            paragraph(doc, "通过上机实验，让学生熟悉Web应用程序开发环境，掌握项目创建、运行和调试的基本要求。");
             paragraph(doc, "六、教学安排及教学方式");
             table(doc, new String[][] {
                 {"序号", "课程内容", "讲授学时", "上机学时", "教学方式"},

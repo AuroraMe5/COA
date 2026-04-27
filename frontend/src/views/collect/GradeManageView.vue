@@ -2,12 +2,12 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="学生成绩管理"
-      description="按课程和学期查询已确认成绩，支持按学生横向查看各考核项成绩，并可进行新增、修改和删除。"
+      description="按课程考核项维护考核内容及方式，分别导入作业、实验、试卷等成绩，并自动汇总为学生课程总成绩。"
     />
 
     <div v-if="message.text" class="notice" :class="message.type">{{ message.text }}</div>
 
-    <PanelCard title="查询条件" subtitle="请选择课程和学期后查询。可按考核项或学生学号、姓名进一步筛选。">
+    <PanelCard title="查询条件">
       <div class="form-grid-4">
         <div class="form-field">
           <label>课程</label>
@@ -38,7 +38,7 @@
           <label>考核项</label>
           <select v-model="filter.assessItemId" class="select-input">
             <option value="">全部考核项</option>
-            <option v-for="item in filteredAssessItems" :key="item.id" :value="String(item.id)">
+            <option v-for="item in assessmentBlocks" :key="item.id" :value="String(item.id)">
               {{ item.itemName }}
             </option>
           </select>
@@ -53,168 +53,406 @@
       </div>
     </PanelCard>
 
-    <PanelCard title="成绩列表">
-      <template #subtitle>
-        <span v-if="filter.courseId && filter.semester">
-          共 <strong>{{ total }}</strong> 名学生
-          <span v-if="loading" class="muted">（更新中…）</span>
-        </span>
-        <span v-else class="muted">请先选择课程和学期</span>
+    <PanelCard title="考核内容及方式表">
+      <template #actions>
+        <button class="btn btn-primary" :disabled="!canUseCourse" @click="openContentDialog">编辑</button>
       </template>
 
-      <div v-if="!filter.courseId || !filter.semester" class="notice info">
-        请先选择课程和学期，筛选结果将实时刷新。
-      </div>
-      <div v-else-if="loading && !rows.length" class="notice info">正在加载成绩...</div>
-      <div v-else-if="!loading && !rows.length" class="notice warning">
-        未查询到成绩数据。可以通过"成绩批量导入"导入，也可以在此手动新增。
-      </div>
+      <div v-if="!canUseCourse" class="notice info">请选择课程和学期。</div>
+      <div v-else-if="loadingContents" class="notice info">正在加载考核内容...</div>
+      <div v-else-if="!assessmentBlocks.length" class="notice warning">当前课程学期尚未配置考核项。</div>
 
-      <template v-if="filter.courseId && filter.semester && !loading">
-        <div class="actions-inline mt-16">
-          <button class="btn btn-primary" :disabled="!canEdit" @click="startAddRow">新增学生成绩</button>
-        </div>
+      <div v-else class="assessment-block-grid">
+        <section v-for="block in visibleAssessmentBlocks" :key="block.id" class="assessment-block">
+          <header class="block-head">
+            <div>
+              <h3>{{ block.itemName }}</h3>
+              <p>{{ block.itemTypeName || '考核项' }} · 考核项权重 {{ formatNumber(block.weight) }}</p>
+            </div>
+            <span class="weight-pill" :class="{ warning: !isBlockWeightOk(block) }">
+              内容合计 {{ formatNumber(block.contentWeight) }}
+            </span>
+          </header>
 
-        <div v-if="draftRow" class="editor-card mt-16">
-          <div class="editor-title">{{ draftMode === 'create' ? '新增学生成绩' : '编辑学生成绩' }}</div>
-          <div class="form-grid-2 mt-12">
-            <div class="form-field">
-              <label>学号</label>
-              <input v-model.trim="draftRow.studentNo" class="text-input" :disabled="draftMode === 'edit'" />
-            </div>
-            <div class="form-field">
-              <label>姓名</label>
-              <input v-model.trim="draftRow.studentName" class="text-input" />
-            </div>
+          <div class="table-shell content-preview-shell">
+            <table class="data-table compact-table content-preview-table">
+              <thead>
+                <tr>
+                  <th>序号</th>
+                  <th>考核内容</th>
+                  <th>类型</th>
+                  <th>权重</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="content in block.contents" :key="content.id">
+                  <td class="mono">{{ content.contentNo }}</td>
+                  <td>{{ content.contentName }}</td>
+                  <td>{{ content.contentTypeName }}</td>
+                  <td class="metric">{{ formatNumber(content.weight) }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="score-editor-grid mt-12">
-            <div v-for="cell in draftRow.cells" :key="cell.assessItemId" class="form-field score-editor-cell">
-              <label>{{ cell.assessItemName }}</label>
-              <input
-                v-model="cell.score"
-                class="text-input"
-                type="number"
-                min="0"
-                :max="cell.maxScore"
-                step="0.01"
-              />
-              <small>满分 {{ cell.maxScore }}</small>
-            </div>
-          </div>
-          <div class="actions-inline mt-16">
-            <button class="btn btn-secondary" :disabled="saving" @click="saveDraftRow">
-              {{ saving ? '保存中...' : '保存' }}
+
+          <div class="block-import">
+            <input type="file" accept=".xlsx,.xls,.csv" @change="handleBlockFileChange(block.id, $event)" />
+            <button class="btn btn-secondary" :disabled="uploadingAssessItemId === block.id" @click="handleUploadBlock(block)">
+              {{ uploadingAssessItemId === block.id ? '导入中...' : '导入该项成绩' }}
             </button>
-            <button class="btn btn-light" @click="cancelDraft">取消</button>
+          </div>
+        </section>
+      </div>
+    </PanelCard>
+
+    <PanelCard v-if="batch" title="成绩导入复核">
+      <div class="info-strip">
+        <div>文件：{{ batch.fileName || '—' }}</div>
+        <div>状态：{{ batchStatusLabel(batch.status) }}</div>
+        <div>有效行：{{ batch.validRows || 0 }}</div>
+        <div>异常行：{{ batch.errorRows || 0 }}</div>
+      </div>
+
+      <div v-if="batch.status === 'PARSED'" class="table-shell grade-preview-shell mt-16">
+        <table class="data-table grade-preview-table">
+          <thead>
+            <tr>
+              <th class="sticky-col row-col">行号</th>
+              <th class="sticky-col student-col">学号</th>
+              <th class="sticky-col name-col">姓名</th>
+              <th v-for="column in batch.previewColumns || []" :key="column.columnKey" class="score-col">
+                <span>{{ column.assessItemName }}</span>
+                <small>{{ column.parentAssessItemName }} · 满分 {{ formatNumber(column.maxScore) }}</small>
+              </th>
+              <th class="status-col">状态</th>
+              <th class="action-col">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in batch.previewRows || []" :key="`${row.row}-${row.studentNo}`" :class="{ 'invalid-row': !row.valid }">
+              <td class="sticky-col row-col">{{ row.row }}</td>
+              <td class="sticky-col student-col">
+                <input v-model.trim="row.studentNo" class="text-input preview-input student-input" />
+              </td>
+              <td class="sticky-col name-col">
+                <input v-model.trim="row.studentName" class="text-input preview-input name-input" />
+              </td>
+              <td v-for="cell in row.cells" :key="cell.columnKey" class="score-cell">
+                <input
+                  v-model="cell.score"
+                  class="text-input preview-input score-input"
+                  :class="{ invalid: !cell.valid }"
+                  type="number"
+                  min="0"
+                  :max="cell.maxScore"
+                  step="0.01"
+                />
+                <small v-if="!cell.valid" class="cell-error">{{ cell.errorMsg }}</small>
+              </td>
+              <td class="status-col">
+                <span v-if="!row.valid" class="status-text-error">异常</span>
+                <span v-else class="metric">有效</span>
+              </td>
+              <td class="action-col">
+                <button class="btn btn-secondary btn-compact" :disabled="savingRow === row.row" @click="savePreviewRow(row)">
+                  {{ savingRow === row.row ? '保存中...' : '保存修改' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="batch.status === 'PARSED'" class="actions-inline mt-16">
+        <button class="btn btn-primary" @click="confirmImport">确认导入有效数据</button>
+      </div>
+    </PanelCard>
+
+    <PanelCard title="学生成绩总表">
+      <template #subtitle>
+        <span v-if="canUseCourse">
+          共 <strong>{{ total }}</strong> 名学生
+          <span v-if="loading" class="muted">（更新中...）</span>
+        </span>
+        <span v-else class="muted">请选择课程和学期</span>
+      </template>
+      <template #actions>
+        <button class="btn btn-primary" :disabled="!canEditGrades" @click="startAddRow">手动录入</button>
+      </template>
+
+      <div v-if="!canUseCourse" class="notice info">请选择课程和学期后查看成绩。</div>
+      <div v-else-if="loading && !rows.length" class="notice info">正在加载成绩...</div>
+      <div v-else-if="!loading && !rows.length" class="notice warning">未查询到成绩数据。</div>
+
+      <div v-if="draftRow" class="editor-card mt-16">
+        <div class="editor-title">{{ draftMode === 'create' ? '新增学生成绩' : '编辑学生成绩' }}</div>
+        <div class="form-grid-2 mt-12">
+          <div class="form-field">
+            <label>学号</label>
+            <input v-model.trim="draftRow.studentNo" class="text-input" :disabled="draftMode === 'edit'" />
+          </div>
+          <div class="form-field">
+            <label>姓名</label>
+            <input v-model.trim="draftRow.studentName" class="text-input" />
           </div>
         </div>
-
-        <div v-if="rows.length" class="table-shell grade-manage-shell mt-16">
-          <table class="data-table grade-manage-table">
-            <thead>
-              <tr>
-                <th class="sticky-col seq-col">序号</th>
-                <th class="sticky-col student-col">学号</th>
-                <th class="sticky-col name-col">姓名</th>
-                <th v-for="column in columns" :key="column.assessItemId" class="score-col">
-                  <span>{{ column.assessItemName }}</span>
-                  <small>满分 {{ column.maxScore }}</small>
-                </th>
-                <th class="action-col">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, idx) in rows" :key="row.studentNo">
-                <td class="sticky-col seq-col muted">{{ idx + 1 }}</td>
-                <td class="sticky-col student-col mono">{{ row.studentNo }}</td>
-                <td class="sticky-col name-col">{{ row.studentName }}</td>
-                <td v-for="cell in row.cells" :key="cell.assessItemId" class="score-col metric">
-                  {{ formatScore(cell.score) }}
-                </td>
-                <td class="action-col">
-                  <button class="btn btn-light btn-compact" @click="startEditRow(row)">编辑</button>
-                  <button class="btn btn-danger btn-compact" @click="deleteRow(row)">删除</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="score-editor-grid mt-12">
+          <div v-for="cell in draftCells" :key="cell.columnKey" class="form-field score-editor-cell">
+            <label>{{ cell.assessItemName }}</label>
+            <input
+              v-model="cell.score"
+              class="text-input"
+              type="number"
+              min="0"
+              :max="cell.maxScore"
+              step="0.01"
+            />
+            <small>{{ cell.parentAssessItemName || '考核项' }} · 满分 {{ formatNumber(cell.maxScore) }}</small>
+          </div>
         </div>
-      </template>
+        <div class="actions-inline mt-16">
+          <button class="btn btn-secondary" :disabled="saving" @click="saveDraftRow">
+            {{ saving ? '保存中...' : '保存' }}
+          </button>
+          <button class="btn btn-light" @click="cancelDraft">取消</button>
+        </div>
+      </div>
+
+      <div v-if="canUseCourse && rows.length" class="table-shell grade-manage-shell mt-16">
+        <table class="data-table grade-manage-table">
+          <thead>
+            <tr>
+              <th class="sticky-col seq-col">序号</th>
+              <th class="sticky-col student-col">学号</th>
+              <th class="sticky-col name-col">姓名</th>
+              <th v-for="column in componentColumns" :key="column.columnKey" class="score-col">
+                <span>{{ column.assessItemName }}</span>
+                <small>{{ column.parentAssessItemName }}</small>
+              </th>
+              <th v-for="column in summaryColumns" :key="column.columnKey" class="score-col summary-score-col">
+                <span>{{ column.assessItemName }}</span>
+                <small>汇总</small>
+              </th>
+              <th class="score-col total-col">总成绩</th>
+              <th class="score-col level-col">等级</th>
+              <th class="action-col">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, idx) in rows" :key="row.studentNo">
+              <td class="sticky-col seq-col muted">{{ idx + 1 }}</td>
+              <td class="sticky-col student-col mono">{{ row.studentNo }}</td>
+              <td class="sticky-col name-col">{{ row.studentName }}</td>
+              <td v-for="cell in row.componentCells" :key="cell.columnKey" class="score-col metric">
+                {{ formatScore(cell.score) }}
+              </td>
+              <td v-for="cell in row.summaryCells" :key="cell.columnKey" class="score-col metric summary-score-col">
+                {{ formatScore(cell.score) }}
+              </td>
+              <td class="score-col metric total-col">{{ formatScore(row.totalScore) }}</td>
+              <td class="score-col level-col">{{ row.gradeLevel || '--' }}</td>
+              <td class="action-col">
+                <button class="btn btn-light btn-compact" @click="startEditRow(row)">编辑</button>
+                <button class="btn btn-danger btn-compact" @click="deleteRow(row)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </PanelCard>
+
+    <div v-if="contentDialog.open" class="modal-backdrop" @click.self="closeContentDialog">
+      <section class="modal-panel content-modal-panel" role="dialog" aria-modal="true" aria-label="考核内容及方式表">
+        <header class="modal-head">
+          <div>
+            <h2>考核内容及方式表</h2>
+            <p>{{ selectedCourseText }} / {{ filter.semester }}</p>
+          </div>
+          <button class="btn btn-light btn-mini" @click="closeContentDialog">关闭</button>
+        </header>
+        <div class="modal-body content-modal-body">
+          <div v-if="contentDialogMessage.text" class="notice" :class="contentDialogMessage.type">
+            {{ contentDialogMessage.text }}
+          </div>
+
+          <PanelCard title="内容维护">
+            <template #actions>
+              <button class="btn btn-light" @click="addContentRow">新增考核内容</button>
+            </template>
+
+            <div class="content-filter-row">
+              <div class="form-field">
+                <label>显示考核项</label>
+                <select v-model="contentDraftFilter.assessItemId" class="select-input">
+                  <option value="">全部考核项</option>
+                  <option v-for="block in assessmentBlocks" :key="block.id" :value="String(block.id)">
+                    {{ block.itemName }}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div class="table-shell content-edit-shell">
+              <table class="data-table compact-table content-edit-table">
+                <thead>
+                  <tr>
+                    <th>序号</th>
+                    <th>考核内容</th>
+                    <th>类型</th>
+                    <th>关联考核项</th>
+                    <th>权重</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in visibleContentDrafts" :key="item.__rowKey">
+                    <td>
+                      <input v-model.trim="item.contentNo" class="text-input seq-input" />
+                    </td>
+                    <td>
+                      <input v-model.trim="item.contentName" class="text-input content-name-input" />
+                    </td>
+                    <td>
+                      <select v-model="item.contentType" class="select-input type-select">
+                        <option value="assignment">作业</option>
+                        <option value="experiment">实验</option>
+                        <option value="exam">考核</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select v-model="item.assessItemId" class="select-input assess-select">
+                        <option v-for="block in assessmentBlocks" :key="block.id" :value="block.id">
+                          {{ block.itemName }}
+                        </option>
+                      </select>
+                    </td>
+                    <td>
+                      <input v-model="item.weight" class="text-input weight-input" type="number" min="0" step="0.01" />
+                    </td>
+                    <td>
+                      <button class="btn btn-danger btn-mini" @click="removeContentRow(item)">删除</button>
+                    </td>
+                  </tr>
+                  <tr v-if="!visibleContentDrafts.length">
+                    <td colspan="6" class="muted">当前筛选下暂无考核内容。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </PanelCard>
+
+          <div class="content-weight-summary">
+            <div v-for="block in assessmentBlocks" :key="block.id" :class="{ warning: !isDraftWeightOk(block) }">
+              <span>{{ block.itemName }}</span>
+              <strong>{{ formatNumber(draftWeightByAssessItem(block.id)) }} / {{ formatNumber(block.weight) }}</strong>
+            </div>
+          </div>
+
+          <div class="modal-footer-actions">
+            <span class="muted">各考核项下的内容权重合计应等于该考核项权重。</span>
+            <button class="btn btn-primary" :disabled="savingContents" @click="saveContents">
+              {{ savingContents ? '保存中...' : '保存' }}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
+  confirmGradeBatch,
   deleteImportedGradeRow,
+  getAssessmentContents,
+  getGradeBatchPreview,
   getImportedGrades,
   getReferenceCatalogs,
-  saveImportedGradeRow
+  saveAssessmentContents,
+  saveImportedGradeRow,
+  updateGradePreviewRow,
+  uploadGradeFile
 } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 
-const catalogs = reactive({ courses: [], semesters: [], assessItems: [], classes: [] })
+const catalogs = reactive({ courses: [], semesters: [], classes: [] })
 const filter = reactive({ courseId: '', semester: '', classId: '', assessItemId: '', keyword: '' })
-const columns = ref([])
+const assessmentBlocks = ref([])
+const summaryColumns = ref([])
+const componentColumns = ref([])
 const rows = ref([])
 const total = ref(0)
 const loading = ref(false)
+const loadingContents = ref(false)
 const saving = ref(false)
+const savingContents = ref(false)
+const uploadingAssessItemId = ref(null)
+const savingRow = ref(null)
 const draftRow = ref(null)
 const draftMode = ref('')
+const batch = ref(null)
+const selectedFiles = reactive({})
+const contentDrafts = ref([])
+const contentDialog = reactive({ open: false })
+const contentDraftFilter = reactive({ assessItemId: '' })
+const contentDialogMessage = reactive({ type: 'info', text: '' })
 const message = reactive({ type: 'info', text: '' })
+let keywordTimer = null
+let pollingTimer = null
 
-const filteredAssessItems = computed(() => {
-  return catalogs.assessItems.filter((item) => {
-    const sameCourse = !filter.courseId || String(item.courseId) === String(filter.courseId)
-    const sameSemester = !filter.semester || String(item.semester) === String(filter.semester)
-    return sameCourse && sameSemester
-  })
+const canUseCourse = computed(() => Boolean(filter.courseId && filter.semester))
+const canEditGrades = computed(() => canUseCourse.value && (componentColumns.value.length || summaryColumns.value.length))
+const visibleAssessmentBlocks = computed(() => {
+  if (!filter.assessItemId) return assessmentBlocks.value
+  return assessmentBlocks.value.filter((item) => String(item.id) === String(filter.assessItemId))
+})
+const visibleContentDrafts = computed(() => {
+  if (!contentDraftFilter.assessItemId) return contentDrafts.value
+  return contentDrafts.value.filter((item) => String(item.assessItemId) === String(contentDraftFilter.assessItemId))
+})
+const selectedCourseText = computed(() => {
+  const course = catalogs.courses.find((item) => String(item.id) === String(filter.courseId))
+  return course ? `${course.name}（${course.code}）` : '当前课程'
+})
+const draftCells = computed(() => {
+  if (!draftRow.value) return []
+  return componentColumns.value.length ? draftRow.value.componentCells : draftRow.value.summaryCells
 })
 
-const canEdit = computed(() => Boolean(filter.courseId && filter.semester && filteredAssessItems.value.length))
-
-// 课程或学期变化：重置子筛选并立即查询（两者都选中时），否则清空结果
 watch(
   [() => filter.courseId, () => filter.semester],
-  ([course, semester]) => {
+  async ([course, semester]) => {
     filter.assessItemId = ''
     cancelDraft()
+    batch.value = null
     if (course && semester) {
-      loadGrades()
+      await loadAssessmentContents()
+      await loadGrades()
     } else {
+      assessmentBlocks.value = []
+      summaryColumns.value = []
+      componentColumns.value = []
       rows.value = []
-      columns.value = []
       total.value = 0
     }
   }
 )
 
-// 考核项变化：直接刷新
 watch(
-  () => filter.assessItemId,
+  [() => filter.classId, () => filter.assessItemId],
   () => {
-    if (filter.courseId && filter.semester) loadGrades()
+    if (canUseCourse.value) loadGrades()
   }
 )
 
-watch(
-  () => filter.classId,
-  () => {
-    if (filter.courseId && filter.semester) loadGrades()
-  }
-)
-
-// 关键字变化：防抖 350ms 后刷新
-let keywordTimer = null
 watch(
   () => filter.keyword,
   () => {
-    if (!filter.courseId || !filter.semester) return
-    clearTimeout(keywordTimer)
-    keywordTimer = setTimeout(loadGrades, 350)
+    if (!canUseCourse.value) return
+    window.clearTimeout(keywordTimer)
+    keywordTimer = window.setTimeout(loadGrades, 350)
   }
 )
 
@@ -223,9 +461,25 @@ function setMessage(type, text) {
   message.text = text
 }
 
-async function loadGrades() {
-  if (!filter.courseId || !filter.semester) return
+async function loadAssessmentContents() {
+  if (!canUseCourse.value) return
+  loadingContents.value = true
+  try {
+    const data = await getAssessmentContents({ courseId: filter.courseId, semester: filter.semester })
+    assessmentBlocks.value = data.assessItems || []
+    if (data.warnings?.length) {
+      setMessage('warning', data.warnings.join('；'))
+    }
+  } catch (error) {
+    assessmentBlocks.value = []
+    setMessage('error', error.message || '考核内容加载失败。')
+  } finally {
+    loadingContents.value = false
+  }
+}
 
+async function loadGrades() {
+  if (!canUseCourse.value) return
   loading.value = true
   cancelDraft()
   try {
@@ -236,12 +490,14 @@ async function loadGrades() {
       assessItemId: filter.assessItemId || undefined,
       keyword: filter.keyword || undefined
     })
-    columns.value = data.columns || []
+    summaryColumns.value = data.summaryColumns || data.columns || []
+    componentColumns.value = data.componentColumns || []
     rows.value = data.rows || []
     total.value = data.total || rows.value.length
-    setMessage('', '')
+    if (!message.text || message.type !== 'warning') setMessage('', '')
   } catch (error) {
-    columns.value = []
+    summaryColumns.value = []
+    componentColumns.value = []
     rows.value = []
     total.value = 0
     setMessage('error', error.message || '成绩查询失败。')
@@ -256,38 +512,220 @@ function resetFilter() {
   filter.classId = ''
   filter.assessItemId = ''
   filter.keyword = ''
-  clearTimeout(keywordTimer)
+  window.clearTimeout(keywordTimer)
   cancelDraft()
+  batch.value = null
   setMessage('', '')
-  // watch([courseId, semester]) 会自动清空 rows/columns
+}
+
+function handleBlockFileChange(assessItemId, event) {
+  selectedFiles[assessItemId] = event.target.files?.[0] || null
+}
+
+async function handleUploadBlock(block) {
+  const file = selectedFiles[block.id]
+  if (!file) {
+    setMessage('error', '请先选择成绩文件。')
+    return
+  }
+  uploadingAssessItemId.value = block.id
+  try {
+    const created = await uploadGradeFile({
+      file,
+      courseId: filter.courseId,
+      classId: filter.classId || undefined,
+      assessItemId: block.id,
+      semester: filter.semester
+    })
+    batch.value = { batchId: created.batchId, status: created.status }
+    stopPolling()
+    pollingTimer = window.setInterval(() => pollBatch(created.batchId), 1000)
+    await pollBatch(created.batchId)
+  } catch (error) {
+    setMessage('error', error.message || '成绩导入批次创建失败。')
+  } finally {
+    uploadingAssessItemId.value = null
+  }
+}
+
+async function pollBatch(batchId) {
+  const data = await getGradeBatchPreview(batchId)
+  batch.value = data
+  if (data.status === 'PARSED') {
+    stopPolling()
+    setMessage('success', '成绩文件已解析完成，请复核后确认导入。')
+  }
+}
+
+function stopPolling() {
+  if (pollingTimer) {
+    window.clearInterval(pollingTimer)
+    pollingTimer = null
+  }
+}
+
+function batchStatusLabel(status) {
+  if (status === 'PARSING') return '解析中'
+  if (status === 'PARSED') return '待确认'
+  if (status === 'CONFIRMED') return '已导入'
+  if (status === 'FAILED') return '解析失败'
+  return status || '--'
+}
+
+async function savePreviewRow(row) {
+  if (!batch.value) return
+  savingRow.value = row.row
+  try {
+    const updated = await updateGradePreviewRow(batch.value.batchId, {
+      studentNo: row.studentNo,
+      studentName: row.studentName,
+      cells: row.cells.map((cell) => ({
+        gradeId: cell.gradeId,
+        score: cell.score,
+        maxScore: cell.maxScore
+      }))
+    })
+    batch.value = updated
+    setMessage('success', `第 ${row.row} 行已重新校验。`)
+  } catch (error) {
+    setMessage('error', error.message || '预览行保存失败。')
+  } finally {
+    savingRow.value = null
+  }
+}
+
+async function confirmImport() {
+  try {
+    const result = await confirmGradeBatch(batch.value.batchId, { importMode: 'valid_only' })
+    batch.value.status = 'CONFIRMED'
+    setMessage('success', `导入完成：已写入 ${result.importedCount} 条有效成绩，跳过 ${result.skippedCount} 条异常数据。`)
+    await loadGrades()
+  } catch (error) {
+    setMessage('error', error.message || '成绩导入失败。')
+  }
+}
+
+function openContentDialog() {
+  contentDrafts.value = assessmentBlocks.value.flatMap((block) =>
+    (block.contents || []).map((item) => ({
+      ...item,
+      assessItemId: item.assessItemId || block.id,
+      __rowKey: `${item.id || 'new'}-${Math.random()}`
+    }))
+  )
+  contentDraftFilter.assessItemId = filter.assessItemId || ''
+  setContentDialogMessage('', '')
+  contentDialog.open = true
+}
+
+function closeContentDialog() {
+  contentDialog.open = false
+}
+
+function setContentDialogMessage(type, text) {
+  contentDialogMessage.type = type
+  contentDialogMessage.text = text
+}
+
+function emptyContentRow() {
+  const block = visibleAssessmentBlocks.value[0] || assessmentBlocks.value[0]
+  const index = contentDrafts.value.length + 1
+  return {
+    id: null,
+    assessItemId: block?.id || '',
+    contentNo: String(index),
+    contentName: `考核内容${index}`,
+    contentType: 'assignment',
+    weight: 0,
+    sortOrder: index,
+    __rowKey: `new-${Date.now()}-${index}`
+  }
+}
+
+function addContentRow() {
+  contentDrafts.value.push(emptyContentRow())
+}
+
+function removeContentRow(item) {
+  const index = contentDrafts.value.findIndex((row) => row.__rowKey === item.__rowKey)
+  if (index < 0) return
+  contentDrafts.value.splice(index, 1)
+}
+
+function draftWeightByAssessItem(assessItemId) {
+  return contentDrafts.value
+    .filter((item) => String(item.assessItemId) === String(assessItemId))
+    .reduce((sum, item) => sum + Number(item.weight || 0), 0)
+}
+
+function isBlockWeightOk(block) {
+  return Math.abs(Number(block.contentWeight || 0) - Number(block.weight || 0)) <= 0.01
+}
+
+function isDraftWeightOk(block) {
+  return Math.abs(draftWeightByAssessItem(block.id) - Number(block.weight || 0)) <= 0.01
+}
+
+async function saveContents() {
+  if (!contentDrafts.value.length) {
+    setContentDialogMessage('error', '至少需要保留 1 条考核内容。')
+    return
+  }
+  savingContents.value = true
+  try {
+    const data = await saveAssessmentContents({
+      courseId: filter.courseId,
+      semester: filter.semester,
+      contents: contentDrafts.value.map((item, index) => ({
+        id: item.id,
+        assessItemId: item.assessItemId,
+        contentNo: item.contentNo,
+        contentName: item.contentName,
+        contentType: item.contentType,
+        weight: item.weight,
+        sortOrder: index + 1
+      }))
+    })
+    assessmentBlocks.value = data.assessItems || []
+    closeContentDialog()
+    if (data.warnings?.length) {
+      setMessage('warning', `考核内容及方式表已保存。${data.warnings.join('；')}`)
+    } else {
+      setMessage('success', '考核内容及方式表已保存。')
+    }
+    await loadGrades()
+  } catch (error) {
+    setContentDialogMessage('error', error.message || '考核内容保存失败。')
+  } finally {
+    savingContents.value = false
+  }
 }
 
 function startAddRow() {
-  if (!canEdit.value) {
-    setMessage('error', '当前课程学期尚未配置考核项，无法新增成绩。')
+  if (!canEditGrades.value) {
+    setMessage('error', '当前课程学期尚未配置考核内容，无法录入成绩。')
     return
   }
-  const sourceColumns = columns.value.length
-    ? columns.value
-    : filteredAssessItems.value
-        .filter((item) => !filter.assessItemId || String(item.id) === String(filter.assessItemId))
-        .map((item) => ({
-        assessItemId: item.id,
-        assessItemName: item.itemName,
-        maxScore: 100
-      }))
   draftMode.value = 'create'
   draftRow.value = {
     studentNo: '',
     studentName: '',
-    cells: sourceColumns.map((column) => ({
-      gradeId: null,
-      assessItemId: column.assessItemId,
-      assessItemName: column.assessItemName,
-      score: '',
-      maxScore: column.maxScore || 100
-    }))
+    summaryCells: cloneCells(summaryColumns.value),
+    componentCells: cloneCells(componentColumns.value)
   }
+}
+
+function cloneCells(source) {
+  return source.map((column) => ({
+    gradeId: null,
+    columnKey: column.columnKey,
+    assessItemId: column.assessItemId,
+    assessContentId: column.assessContentId,
+    assessItemName: column.assessItemName,
+    parentAssessItemName: column.parentAssessItemName,
+    score: '',
+    maxScore: column.maxScore || 100
+  }))
 }
 
 function startEditRow(row) {
@@ -295,7 +733,8 @@ function startEditRow(row) {
   draftRow.value = {
     studentNo: row.studentNo,
     studentName: row.studentName,
-    cells: row.cells.map((cell) => ({ ...cell }))
+    summaryCells: (row.summaryCells || row.cells || []).map((cell) => ({ ...cell })),
+    componentCells: (row.componentCells || []).map((cell) => ({ ...cell }))
   }
 }
 
@@ -308,13 +747,15 @@ async function saveDraftRow() {
   if (!draftRow.value) return
   saving.value = true
   try {
+    const useComponents = componentColumns.value.length > 0
     await saveImportedGradeRow({
       courseId: filter.courseId,
       semester: filter.semester,
       classId: filter.classId,
       studentNo: draftRow.value.studentNo,
       studentName: draftRow.value.studentName,
-      cells: draftRow.value.cells
+      cells: useComponents ? [] : draftRow.value.summaryCells,
+      componentCells: useComponents ? draftRow.value.componentCells : []
     })
     setMessage('success', draftMode.value === 'create' ? '学生成绩已新增。' : '学生成绩已保存。')
     cancelDraft()
@@ -349,15 +790,25 @@ function formatScore(value) {
   return Number.isNaN(number) ? value : number.toFixed(2)
 }
 
+function formatNumber(value) {
+  if (value === null || value === undefined || value === '') return '0'
+  const number = Number(value)
+  if (Number.isNaN(number)) return value
+  return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, '')
+}
+
 async function loadCatalogs() {
   const data = await getReferenceCatalogs()
   catalogs.courses = data.courses || []
   catalogs.semesters = data.semesters || []
-  catalogs.assessItems = data.assessItems || []
   catalogs.classes = data.classes || []
 }
 
 onMounted(loadCatalogs)
+onBeforeUnmount(() => {
+  stopPolling()
+  window.clearTimeout(keywordTimer)
+})
 </script>
 
 <style scoped>
@@ -365,6 +816,83 @@ onMounted(loadCatalogs)
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
+}
+
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.assessment-block-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+}
+
+.assessment-block {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.block-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-panel-soft);
+}
+
+.block-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--color-primary-deep);
+}
+
+.block-head p {
+  margin: 6px 0 0;
+  color: var(--color-text-soft);
+  font-size: 13px;
+}
+
+.weight-pill {
+  align-self: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--color-secondary-soft);
+  color: var(--color-secondary);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.weight-pill.warning,
+.content-weight-summary .warning {
+  background: #fff7e8;
+  color: var(--color-warning);
+}
+
+.content-preview-shell {
+  border: 0;
+  border-radius: 0;
+  max-height: 220px;
+}
+
+.content-preview-table {
+  min-width: 420px;
+}
+
+.block-import {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 16px 16px;
+}
+
+.block-import input {
+  min-width: 0;
 }
 
 .editor-card {
@@ -390,17 +918,23 @@ onMounted(loadCatalogs)
   color: var(--color-text-soft);
 }
 
-.grade-manage-shell {
+.grade-manage-shell,
+.grade-preview-shell {
   border: 1px solid #e2edf3;
   border-radius: 8px;
-  max-height: 560px;
+  max-height: 620px;
 }
 
 .grade-manage-table {
-  min-width: 900px;
+  min-width: 1280px;
 }
 
-.grade-manage-table th {
+.grade-preview-table {
+  min-width: 980px;
+}
+
+.grade-manage-table th,
+.grade-preview-table th {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -408,23 +942,26 @@ onMounted(loadCatalogs)
 }
 
 .grade-manage-table th,
-.grade-manage-table td {
+.grade-manage-table td,
+.grade-preview-table th,
+.grade-preview-table td {
   padding: 10px;
   vertical-align: middle;
   background: #fff;
 }
 
-.grade-manage-table .sticky-col {
+.sticky-col {
   position: sticky;
   z-index: 3;
   box-shadow: 1px 0 0 #e8f0f4;
 }
 
-.grade-manage-table th.sticky-col {
+th.sticky-col {
   z-index: 4;
 }
 
-.seq-col {
+.seq-col,
+.row-col {
   left: 0;
   width: 64px;
   min-width: 64px;
@@ -444,7 +981,7 @@ onMounted(loadCatalogs)
 }
 
 .score-col {
-  min-width: 132px;
+  min-width: 120px;
   text-align: right;
 }
 
@@ -460,20 +997,194 @@ onMounted(loadCatalogs)
   font-weight: 500;
 }
 
+.summary-score-col {
+  background: #fbfdfe;
+}
+
+.total-col {
+  min-width: 110px;
+  color: var(--color-secondary);
+}
+
+.level-col {
+  min-width: 90px;
+}
+
 .action-col {
   min-width: 150px;
   white-space: nowrap;
 }
 
-.btn-compact {
-  padding: 8px 12px;
-  margin-right: 8px;
+.status-col {
+  min-width: 110px;
+}
+
+.btn-compact,
+.btn-mini {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
   white-space: nowrap;
+}
+
+.preview-input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
+  border-radius: 6px;
+}
+
+.score-input {
+  max-width: 96px;
+}
+
+.preview-input.invalid {
+  border-color: var(--color-danger);
+  background: #fff7f7;
+}
+
+.invalid-row td {
+  background: #fffafa;
+}
+
+.cell-error {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-danger);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.status-text-error {
+  color: var(--color-danger);
+  font-weight: 700;
 }
 
 .mono {
   font-family: var(--font-mono, monospace);
   font-size: 13px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 31, 45, 0.42);
+}
+
+.modal-panel {
+  width: min(1280px, 96vw);
+  max-height: 92vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-radius: var(--radius-lg);
+  background: var(--bg-app);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 24px 80px rgba(15, 31, 45, 0.26);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-panel);
+}
+
+.modal-head h2 {
+  margin: 0;
+  color: var(--color-primary-deep);
+  font-size: 18px;
+}
+
+.modal-head p {
+  margin: 6px 0 0;
+  color: var(--color-text-soft);
+  font-size: 13px;
+}
+
+.modal-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.content-modal-panel {
+  width: min(1180px, 96vw);
+}
+
+.content-modal-body {
+  display: grid;
+  gap: 16px;
+}
+
+.content-filter-row {
+  margin-bottom: 12px;
+  max-width: 280px;
+}
+
+.content-edit-shell {
+  max-height: calc(92vh - 390px);
+  overflow: auto;
+}
+
+.content-edit-table {
+  min-width: 900px;
+}
+
+.content-edit-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.seq-input {
+  min-width: 72px;
+}
+
+.content-name-input {
+  min-width: 220px;
+}
+
+.type-select {
+  min-width: 108px;
+}
+
+.assess-select {
+  min-width: 180px;
+}
+
+.weight-input {
+  min-width: 96px;
+}
+
+.content-weight-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.content-weight-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.modal-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
 }
 
 @media (max-width: 1080px) {
@@ -483,7 +1194,12 @@ onMounted(loadCatalogs)
 }
 
 @media (max-width: 720px) {
-  .form-grid-4 {
+  .form-grid-4,
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .assessment-block-grid {
     grid-template-columns: 1fr;
   }
 }

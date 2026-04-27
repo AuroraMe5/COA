@@ -11,10 +11,6 @@ export const objectiveManageTabs = [
 
 export const collectModuleTabs = [
   {
-    label: '成绩批量导入',
-    to: '/collect/grades'
-  },
-  {
     label: '学生成绩管理',
     to: '/collect/grades/manage'
   }

@@ -106,6 +106,7 @@ public class OutlineService {
             SELECT id, item_name, item_type, weight, max_score, sort_order
             FROM assess_item
             WHERE outline_id = :outlineId
+              AND sort_order < 1000
             ORDER BY sort_order ASC, id ASC
             """, new MapSqlParameterSource("outlineId", outlineId), (rs, rowNum) -> Map.of(
             "id", rs.getLong("id"),

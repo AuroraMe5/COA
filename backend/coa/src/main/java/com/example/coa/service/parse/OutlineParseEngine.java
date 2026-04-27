@@ -375,7 +375,7 @@ public class OutlineParseEngine {
                     practiceHours == 0 ? null : practiceHours,
                     method,
                     defaultIfBlank(extractRelatedObjectives(entry.text()), extractRelatedObjectives(detailWindow)),
-                    extractRequirementText(detailWindow),
+                    extractTeachingRequirementText(detailWindow, title),
                     defaultIfBlank(detailWindow, entry.text())
                 ));
             }
@@ -398,7 +398,7 @@ public class OutlineParseEngine {
                 null,
                 heading.title().contains("实验") ? "上机" : "讲授",
                 extractRelatedObjectives(window),
-                extractRequirementText(window),
+                extractTeachingRequirementText(window, heading.title()),
                 window
             ));
         }
@@ -782,10 +782,58 @@ public class OutlineParseEngine {
         Matcher matcher = Pattern.compile("(?s)(?:^|\\n)\\s*1[.．、]?\\s*基本要求\\s*(.+?)(?=\\n\\s*2[.．、]?\\s*重点|\\n\\s*重点[:：]|\\n\\s*2[.．、]?\\s*重点、难点|\\n\\s*3[.．、]?\\s*作业|$)")
             .matcher(defaultIfBlank(text, ""));
         if (matcher.find()) {
-            return sanitizeText(matcher.group(1));
+            String value = sanitizeText(matcher.group(1));
+            return hasMeaningfulRequirementText(value) ? value : "";
         }
         String value = extractBetweenLabels(text, List.of("基本要求"), List.of("重点", "难点", "作业", "课外学习要求"));
-        return defaultIfBlank(value, "");
+        return hasMeaningfulRequirementText(value) ? value : "";
+    }
+
+    private String extractTeachingRequirementText(String text, String title) {
+        String requirement = extractRequirementText(text);
+        if (hasMeaningfulRequirementText(requirement)) {
+            return requirement;
+        }
+        if (sanitizeText(title).startsWith("实验")) {
+            return extractExperimentRequirementText(text, title);
+        }
+        return "";
+    }
+
+    private String extractExperimentRequirementText(String text, String title) {
+        String titleKey = normalizeTeachingTitle(title);
+        List<String> lines = splitLines(defaultIfBlank(text, ""));
+        List<String> requirementLines = new ArrayList<>();
+        for (String rawLine : lines) {
+            String line = sanitizeText(rawLine);
+            if (!StringUtils.hasText(line)) {
+                continue;
+            }
+            if (matchTeachingHeading(line) != null) {
+                continue;
+            }
+            String lineKey = normalizeTeachingTitle(line);
+            if (StringUtils.hasText(titleKey) && (lineKey.equals(titleKey) || lineKey.contains(titleKey) || titleKey.contains(lineKey))) {
+                continue;
+            }
+            if (containsAny(line, List.of("课程实验", "重点覆盖课程目标", "教学安排及教学方式", "考核要求与成绩评定"))) {
+                continue;
+            }
+            if (looksLikeHeading(line, List.of("重点", "难点", "作业", "课外学习要求"))) {
+                break;
+            }
+            requirementLines.add(line);
+        }
+        return sanitizeText(String.join("\n", requirementLines));
+    }
+
+    private boolean hasMeaningfulRequirementText(String value) {
+        String text = sanitizeText(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return Pattern.compile("[\\p{IsHan}A-Za-z0-9]").matcher(text).find()
+            && normalizeForMatch(text).length() > 2;
     }
 
     private int findAssessmentLineIndex(List<LineEntry> lines, AssessCandidate candidate) {
