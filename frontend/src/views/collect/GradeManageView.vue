@@ -54,10 +54,6 @@
     </PanelCard>
 
     <PanelCard title="考核内容及方式表">
-      <template #actions>
-        <button class="btn btn-primary" :disabled="!canUseCourse" @click="openContentDialog">编辑</button>
-      </template>
-
       <div v-if="!canUseCourse" class="notice info">请选择课程和学期。</div>
       <div v-else-if="loadingContents" class="notice info">正在加载考核内容...</div>
       <div v-else-if="!assessmentBlocks.length" class="notice warning">当前课程学期尚未配置考核项。</div>
@@ -69,9 +65,12 @@
               <h3>{{ block.itemName }}</h3>
               <p>{{ block.itemTypeName || '考核项' }} · 考核项权重 {{ formatNumber(block.weight) }}</p>
             </div>
-            <span class="weight-pill" :class="{ warning: !isBlockWeightOk(block) }">
-              内容合计 {{ formatNumber(block.contentWeight) }}
-            </span>
+            <div class="block-head-actions">
+              <span class="weight-pill" :class="{ warning: !isBlockWeightOk(block) }">
+                内容合计 {{ formatNumber(block.contentWeight) }}
+              </span>
+              <button class="btn btn-light btn-mini" @click="openContentDialog(block)">编辑</button>
+            </div>
           </header>
 
           <div class="table-shell content-preview-shell">
@@ -90,6 +89,9 @@
                   <td>{{ content.contentName }}</td>
                   <td>{{ content.contentTypeName }}</td>
                   <td class="metric">{{ formatNumber(content.weight) }}</td>
+                </tr>
+                <tr v-if="!(block.contents || []).length">
+                  <td colspan="4" class="muted">暂无考核内容。</td>
                 </tr>
               </tbody>
             </table>
@@ -122,7 +124,7 @@
               <th class="sticky-col name-col">姓名</th>
               <th v-for="column in batch.previewColumns || []" :key="column.columnKey" class="score-col">
                 <span>{{ column.assessItemName }}</span>
-                <small>{{ column.parentAssessItemName }} · 满分 {{ formatNumber(column.maxScore) }}</small>
+                <small>{{ columnScaleLabel(column) }}</small>
               </th>
               <th class="status-col">状态</th>
               <th class="action-col">操作</th>
@@ -139,14 +141,28 @@
               </td>
               <td v-for="cell in row.cells" :key="cell.columnKey" class="score-cell">
                 <input
+                  v-if="cell.assessContentId"
+                  v-model="cell.rawScore"
+                  class="text-input preview-input score-input"
+                  :class="{ invalid: !cell.valid }"
+                  type="number"
+                  min="0"
+                  :max="cell.rawMaxScore || 100"
+                  step="0.01"
+                />
+                <input
+                  v-else
                   v-model="cell.score"
                   class="text-input preview-input score-input"
                   :class="{ invalid: !cell.valid }"
                   type="number"
                   min="0"
-                  :max="cell.maxScore"
+                  :max="scoreInputMax(cell)"
                   step="0.01"
                 />
+                <small v-if="cell.assessContentId" class="score-converted">
+                  折算 {{ formatScore(convertedPreviewScore(cell)) }} / {{ formatNumber(cell.convertedMaxScore || cell.maxScore) }}
+                </small>
                 <small v-if="!cell.valid" class="cell-error">{{ cell.errorMsg }}</small>
               </td>
               <td class="status-col">
@@ -163,8 +179,91 @@
         </table>
       </div>
 
-      <div v-if="batch.status === 'PARSED'" class="actions-inline mt-16">
-        <button class="btn btn-primary" @click="confirmImport">确认导入有效数据</button>
+      <div v-if="batch.status === 'PARSED'" class="actions-inline confirm-import-actions mt-16">
+        <div v-if="overwriteableDuplicateCount" class="score-mode-toggle" role="group" aria-label="重复成绩处理方式">
+          <button
+            v-for="option in confirmImportModeOptions"
+            :key="option.value"
+            type="button"
+            class="mode-toggle-btn"
+            :class="{ active: confirmImportMode === option.value }"
+            @click="confirmImportMode = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+        <span v-if="overwriteableDuplicateCount" class="duplicate-count">可覆盖 {{ overwriteableDuplicateCount }} 条重复成绩</span>
+        <button class="btn btn-primary" @click="confirmImport">
+          {{ confirmImportMode === 'overwrite' ? '覆盖并确认导入' : '确认导入有效数据' }}
+        </button>
+      </div>
+    </PanelCard>
+
+    <PanelCard v-if="canUseCourse && importTables.length" title="已导入成绩明细">
+      <template #subtitle>
+        <span class="muted">每个导入文件单独成表，原始分按表格列满分保存，折算分按考核内容权重计算。</span>
+      </template>
+      <template #actions>
+        <div class="score-mode-toggle" role="group" aria-label="成绩明细显示">
+          <button
+            v-for="option in importScoreModeOptions"
+            :key="option.value"
+            type="button"
+            class="mode-toggle-btn"
+            :class="{ active: importScoreMode === option.value }"
+            @click="importScoreMode = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </template>
+
+      <div class="import-table-stack">
+        <section v-for="table in importTables" :key="table.batchNo" class="import-table-card">
+          <header class="import-table-head">
+            <div>
+              <h3>{{ table.fileName }}</h3>
+              <p>{{ table.assessItemName }} · {{ table.confirmedAt || table.createdAt }}</p>
+            </div>
+            <span class="weight-pill">学生 {{ table.total || 0 }}</span>
+          </header>
+
+          <div class="table-shell import-detail-shell">
+            <table class="data-table import-detail-table">
+              <thead>
+                <tr>
+                  <th class="sticky-col seq-col">序号</th>
+                  <th class="sticky-col student-col">学号</th>
+                  <th class="sticky-col name-col">姓名</th>
+                  <th
+                    v-for="column in importDisplayColumns(table)"
+                    :key="column.key"
+                    class="score-col"
+                    :class="column.className"
+                  >
+                    <span>{{ column.assessItemName }}</span>
+                    <small>{{ column.label }}</small>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, idx) in table.rows" :key="`${table.batchNo}-${row.studentNo}`">
+                  <td class="sticky-col seq-col muted">{{ idx + 1 }}</td>
+                  <td class="sticky-col student-col mono">{{ row.studentNo }}</td>
+                  <td class="sticky-col name-col">{{ row.studentName }}</td>
+                  <td
+                    v-for="cell in importDisplayCells(row)"
+                    :key="cell.key"
+                    class="score-col metric"
+                    :class="cell.className"
+                  >
+                    {{ formatScore(cell.value) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </PanelCard>
 
@@ -200,14 +299,26 @@
           <div v-for="cell in draftCells" :key="cell.columnKey" class="form-field score-editor-cell">
             <label>{{ cell.assessItemName }}</label>
             <input
+              v-if="cell.assessContentId"
+              v-model="cell.rawScore"
+              class="text-input"
+              type="number"
+              min="0"
+              :max="cell.rawMaxScore || 100"
+              step="0.01"
+              :placeholder="`原始分 / ${formatNumber(cell.rawMaxScore || 100)}`"
+            />
+            <input
+              v-else
               v-model="cell.score"
               class="text-input"
               type="number"
               min="0"
-              :max="cell.maxScore"
+              :max="scoreInputMax(cell)"
               step="0.01"
+              placeholder="成绩"
             />
-            <small>{{ cell.parentAssessItemName || '考核项' }} · 满分 {{ formatNumber(cell.maxScore) }}</small>
+            <small>{{ cell.parentAssessItemName || '考核项' }} · {{ columnScaleLabel(cell) }}</small>
           </div>
         </div>
         <div class="actions-inline mt-16">
@@ -227,7 +338,7 @@
               <th class="sticky-col name-col">姓名</th>
               <th v-for="column in componentColumns" :key="column.columnKey" class="score-col">
                 <span>{{ column.assessItemName }}</span>
-                <small>{{ column.parentAssessItemName }}</small>
+                <small>{{ column.parentAssessItemName }} · 权重 {{ formatNumber(column.maxScore) }}</small>
               </th>
               <th v-for="column in summaryColumns" :key="column.columnKey" class="score-col summary-score-col">
                 <span>{{ column.assessItemName }}</span>
@@ -265,8 +376,8 @@
       <section class="modal-panel content-modal-panel" role="dialog" aria-modal="true" aria-label="考核内容及方式表">
         <header class="modal-head">
           <div>
-            <h2>考核内容及方式表</h2>
-            <p>{{ selectedCourseText }} / {{ filter.semester }}</p>
+            <h2>{{ contentDialog.blockName || '考核内容及方式表' }}</h2>
+            <p>{{ selectedCourseText }} / {{ filter.semester }} · 考核项权重 {{ formatNumber(contentDialog.blockWeight) }}</p>
           </div>
           <button class="btn btn-light btn-mini" @click="closeContentDialog">关闭</button>
         </header>
@@ -280,18 +391,6 @@
               <button class="btn btn-light" @click="addContentRow">新增考核内容</button>
             </template>
 
-            <div class="content-filter-row">
-              <div class="form-field">
-                <label>显示考核项</label>
-                <select v-model="contentDraftFilter.assessItemId" class="select-input">
-                  <option value="">全部考核项</option>
-                  <option v-for="block in assessmentBlocks" :key="block.id" :value="String(block.id)">
-                    {{ block.itemName }}
-                  </option>
-                </select>
-              </div>
-            </div>
-
             <div class="table-shell content-edit-shell">
               <table class="data-table compact-table content-edit-table">
                 <thead>
@@ -299,7 +398,6 @@
                     <th>序号</th>
                     <th>考核内容</th>
                     <th>类型</th>
-                    <th>关联考核项</th>
                     <th>权重</th>
                     <th>操作</th>
                   </tr>
@@ -320,13 +418,6 @@
                       </select>
                     </td>
                     <td>
-                      <select v-model="item.assessItemId" class="select-input assess-select">
-                        <option v-for="block in assessmentBlocks" :key="block.id" :value="block.id">
-                          {{ block.itemName }}
-                        </option>
-                      </select>
-                    </td>
-                    <td>
                       <input v-model="item.weight" class="text-input weight-input" type="number" min="0" step="0.01" />
                     </td>
                     <td>
@@ -334,22 +425,25 @@
                     </td>
                   </tr>
                   <tr v-if="!visibleContentDrafts.length">
-                    <td colspan="6" class="muted">当前筛选下暂无考核内容。</td>
+                    <td colspan="5" class="muted">当前考核项暂无考核内容。</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </PanelCard>
 
-          <div class="content-weight-summary">
-            <div v-for="block in assessmentBlocks" :key="block.id" :class="{ warning: !isDraftWeightOk(block) }">
-              <span>{{ block.itemName }}</span>
-              <strong>{{ formatNumber(draftWeightByAssessItem(block.id)) }} / {{ formatNumber(block.weight) }}</strong>
+          <div v-if="editingAssessmentBlock" class="content-weight-summary single">
+            <div :class="{ warning: !isDraftWeightOk(editingAssessmentBlock) }">
+              <span>{{ editingAssessmentBlock.itemName }}</span>
+              <strong>
+                {{ formatNumber(draftWeightByAssessItem(editingAssessmentBlock.id)) }} /
+                {{ formatNumber(editingAssessmentBlock.weight) }}
+              </strong>
             </div>
           </div>
 
           <div class="modal-footer-actions">
-            <span class="muted">各考核项下的内容权重合计应等于该考核项权重。</span>
+            <span class="muted">当前考核项下的内容权重合计应等于该考核项权重。</span>
             <button class="btn btn-primary" :disabled="savingContents" @click="saveContents">
               {{ savingContents ? '保存中...' : '保存' }}
             </button>
@@ -382,6 +476,9 @@ const filter = reactive({ courseId: '', semester: '', classId: '', assessItemId:
 const assessmentBlocks = ref([])
 const summaryColumns = ref([])
 const componentColumns = ref([])
+const importTables = ref([])
+const importScoreMode = ref('all')
+const confirmImportMode = ref('valid_only')
 const rows = ref([])
 const total = ref(0)
 const loading = ref(false)
@@ -395,10 +492,18 @@ const draftMode = ref('')
 const batch = ref(null)
 const selectedFiles = reactive({})
 const contentDrafts = ref([])
-const contentDialog = reactive({ open: false })
-const contentDraftFilter = reactive({ assessItemId: '' })
+const contentDialog = reactive({ open: false, assessItemId: '', blockName: '', blockWeight: 0 })
 const contentDialogMessage = reactive({ type: 'info', text: '' })
 const message = reactive({ type: 'info', text: '' })
+const importScoreModeOptions = [
+  { value: 'all', label: '全部分数' },
+  { value: 'raw', label: '原始分数' },
+  { value: 'converted', label: '折算后分数' }
+]
+const confirmImportModeOptions = [
+  { value: 'valid_only', label: '跳过重复' },
+  { value: 'overwrite', label: '覆盖已有' }
+]
 let keywordTimer = null
 let pollingTimer = null
 
@@ -409,9 +514,18 @@ const visibleAssessmentBlocks = computed(() => {
   return assessmentBlocks.value.filter((item) => String(item.id) === String(filter.assessItemId))
 })
 const visibleContentDrafts = computed(() => {
-  if (!contentDraftFilter.assessItemId) return contentDrafts.value
-  return contentDrafts.value.filter((item) => String(item.assessItemId) === String(contentDraftFilter.assessItemId))
+  if (!contentDialog.assessItemId) return []
+  return contentDrafts.value.filter((item) => String(item.assessItemId) === String(contentDialog.assessItemId))
 })
+const editingAssessmentBlock = computed(() => {
+  if (!contentDialog.assessItemId) return null
+  return assessmentBlocks.value.find((item) => String(item.id) === String(contentDialog.assessItemId)) || null
+})
+const overwriteableDuplicateCount = computed(() =>
+  (batch.value?.previewRows || []).reduce((count, row) => (
+    count + (row.cells || []).filter((cell) => isOverwriteableDuplicate(cell.errorMsg)).length
+  ), 0)
+)
 const selectedCourseText = computed(() => {
   const course = catalogs.courses.find((item) => String(item.id) === String(filter.courseId))
   return course ? `${course.name}（${course.code}）` : '当前课程'
@@ -434,6 +548,7 @@ watch(
       assessmentBlocks.value = []
       summaryColumns.value = []
       componentColumns.value = []
+      importTables.value = []
       rows.value = []
       total.value = 0
     }
@@ -492,12 +607,14 @@ async function loadGrades() {
     })
     summaryColumns.value = data.summaryColumns || data.columns || []
     componentColumns.value = data.componentColumns || []
+    importTables.value = data.importTables || []
     rows.value = data.rows || []
     total.value = data.total || rows.value.length
     if (!message.text || message.type !== 'warning') setMessage('', '')
   } catch (error) {
     summaryColumns.value = []
     componentColumns.value = []
+    importTables.value = []
     rows.value = []
     total.value = 0
     setMessage('error', error.message || '成绩查询失败。')
@@ -515,6 +632,8 @@ function resetFilter() {
   window.clearTimeout(keywordTimer)
   cancelDraft()
   batch.value = null
+  importTables.value = []
+  confirmImportMode.value = 'valid_only'
   setMessage('', '')
 }
 
@@ -529,6 +648,7 @@ async function handleUploadBlock(block) {
     return
   }
   uploadingAssessItemId.value = block.id
+  confirmImportMode.value = 'valid_only'
   try {
     const created = await uploadGradeFile({
       file,
@@ -553,7 +673,10 @@ async function pollBatch(batchId) {
   batch.value = data
   if (data.status === 'PARSED') {
     stopPolling()
-    setMessage('success', '成绩文件已解析完成，请复核后确认导入。')
+    if (!overwriteableDuplicateCount.value) {
+      confirmImportMode.value = 'valid_only'
+    }
+    setMessage('success', '成绩文件已解析完成，内容成绩已按权重折算，请复核后确认导入。')
   }
 }
 
@@ -581,6 +704,8 @@ async function savePreviewRow(row) {
       studentName: row.studentName,
       cells: row.cells.map((cell) => ({
         gradeId: cell.gradeId,
+        assessContentId: cell.assessContentId,
+        rawScore: cell.rawScore,
         score: cell.score,
         maxScore: cell.maxScore
       }))
@@ -596,30 +721,38 @@ async function savePreviewRow(row) {
 
 async function confirmImport() {
   try {
-    const result = await confirmGradeBatch(batch.value.batchId, { importMode: 'valid_only' })
+    const result = await confirmGradeBatch(batch.value.batchId, { importMode: confirmImportMode.value })
     batch.value.status = 'CONFIRMED'
-    setMessage('success', `导入完成：已写入 ${result.importedCount} 条有效成绩，跳过 ${result.skippedCount} 条异常数据。`)
+    const overwritten = Number(result.overwrittenCount || 0)
+    const overwriteText = overwritten > 0 ? `，覆盖 ${overwritten} 条已有成绩` : ''
+    setMessage('success', `导入完成：已写入 ${result.importedCount} 条有效原始成绩${overwriteText}，跳过 ${result.skippedCount} 条异常数据。`)
     await loadGrades()
   } catch (error) {
     setMessage('error', error.message || '成绩导入失败。')
   }
 }
 
-function openContentDialog() {
-  contentDrafts.value = assessmentBlocks.value.flatMap((block) =>
-    (block.contents || []).map((item) => ({
+function openContentDialog(block) {
+  if (!block) return
+  contentDrafts.value = assessmentBlocks.value.flatMap((itemBlock) =>
+    (itemBlock.contents || []).map((item) => ({
       ...item,
-      assessItemId: item.assessItemId || block.id,
+      assessItemId: item.assessItemId || itemBlock.id,
       __rowKey: `${item.id || 'new'}-${Math.random()}`
     }))
   )
-  contentDraftFilter.assessItemId = filter.assessItemId || ''
+  contentDialog.assessItemId = String(block.id)
+  contentDialog.blockName = block.itemName
+  contentDialog.blockWeight = block.weight || 0
   setContentDialogMessage('', '')
   contentDialog.open = true
 }
 
 function closeContentDialog() {
   contentDialog.open = false
+  contentDialog.assessItemId = ''
+  contentDialog.blockName = ''
+  contentDialog.blockWeight = 0
 }
 
 function setContentDialogMessage(type, text) {
@@ -628,8 +761,8 @@ function setContentDialogMessage(type, text) {
 }
 
 function emptyContentRow() {
-  const block = visibleAssessmentBlocks.value[0] || assessmentBlocks.value[0]
-  const index = contentDrafts.value.length + 1
+  const block = editingAssessmentBlock.value || assessmentBlocks.value.find((item) => String(item.id) === String(contentDialog.assessItemId))
+  const index = visibleContentDrafts.value.length + 1
   return {
     id: null,
     assessItemId: block?.id || '',
@@ -723,7 +856,11 @@ function cloneCells(source) {
     assessContentId: column.assessContentId,
     assessItemName: column.assessItemName,
     parentAssessItemName: column.parentAssessItemName,
+    rawScore: '',
+    rawMaxScore: column.rawMaxScore || 100,
     score: '',
+    convertedScore: '',
+    convertedMaxScore: column.convertedMaxScore || column.maxScore || 100,
     maxScore: column.maxScore || 100
   }))
 }
@@ -797,6 +934,88 @@ function formatNumber(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, '')
 }
 
+function hasScoreInput(value) {
+  return value !== null && value !== undefined && String(value).trim() !== ''
+}
+
+function isOverwriteableDuplicate(message) {
+  return String(message || '').includes('与已有成绩重复')
+}
+
+function shouldShowRawImportScore() {
+  return importScoreMode.value === 'all' || importScoreMode.value === 'raw'
+}
+
+function shouldShowConvertedImportScore() {
+  return importScoreMode.value === 'all' || importScoreMode.value === 'converted'
+}
+
+function importDisplayColumns(table) {
+  return (table?.columns || []).flatMap((column) => {
+    const columns = []
+    if (shouldShowRawImportScore()) {
+      const rawMax = formatNumber(column.rawMaxScore || 100)
+      columns.push({
+        key: `${column.columnKey}-raw`,
+        assessItemName: column.assessItemName,
+        label: `原始分 / ${rawMax}`,
+        className: 'raw-score-col'
+      })
+    }
+    if (shouldShowConvertedImportScore()) {
+      columns.push({
+        key: `${column.columnKey}-converted`,
+        assessItemName: column.assessItemName,
+        label: `折算分 / ${formatNumber(column.convertedMaxScore || column.maxScore)}`,
+        className: 'converted-score-col'
+      })
+    }
+    return columns
+  })
+}
+
+function importDisplayCells(row) {
+  return (row?.cells || []).flatMap((cell) => {
+    const cells = []
+    if (shouldShowRawImportScore()) {
+      cells.push({
+        key: `${cell.columnKey}-raw`,
+        value: cell.rawScore,
+        className: 'raw-score-col'
+      })
+    }
+    if (shouldShowConvertedImportScore()) {
+      cells.push({
+        key: `${cell.columnKey}-converted`,
+        value: cell.convertedScore,
+        className: 'converted-score-col'
+      })
+    }
+    return cells
+  })
+}
+
+function columnScaleLabel(column) {
+  const rawMax = formatNumber(column?.rawMaxScore || 100)
+  return column?.assessContentId
+    ? `原始分 / ${rawMax} · 折算权重 ${formatNumber(column.convertedMaxScore || column.maxScore)}`
+    : `满分 ${formatNumber(column?.maxScore)}`
+}
+
+function scoreInputMax(cell) {
+  return cell?.assessContentId ? undefined : cell?.maxScore
+}
+
+function convertedPreviewScore(cell) {
+  if (!cell?.assessContentId) return cell?.score
+  if (!hasScoreInput(cell.rawScore)) return cell.convertedScore
+  const raw = Number(cell.rawScore)
+  if (Number.isNaN(raw)) return cell.convertedScore
+  const max = Number(cell.convertedMaxScore || cell.maxScore || 0)
+  const rawMax = Number(cell.rawMaxScore || 100)
+  return rawMax > 0 ? (raw / rawMax) * max : cell.convertedScore
+}
+
 async function loadCatalogs() {
   const data = await getReferenceCatalogs()
   catalogs.courses = data.courses || []
@@ -858,6 +1077,13 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+.block-head-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
 .weight-pill {
   align-self: center;
   padding: 6px 10px;
@@ -893,6 +1119,123 @@ onBeforeUnmount(() => {
 
 .block-import input {
   min-width: 0;
+}
+
+.import-table-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.import-table-card {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.import-table-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-panel-soft);
+}
+
+.import-table-head h3 {
+  margin: 0;
+  color: var(--color-primary-deep);
+  font-size: 15px;
+}
+
+.import-table-head p {
+  margin: 6px 0 0;
+  color: var(--color-text-soft);
+  font-size: 13px;
+}
+
+.score-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid #d9e7ee;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mode-toggle-btn {
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mode-toggle-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(15, 138, 120, 0.18);
+}
+
+.confirm-import-actions {
+  align-items: center;
+}
+
+.duplicate-count {
+  color: var(--color-warning);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.import-detail-shell {
+  border: 0;
+  border-radius: 0;
+  max-height: 420px;
+}
+
+.import-detail-table {
+  min-width: 1180px;
+}
+
+.import-detail-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f7fbfd;
+}
+
+.import-detail-table th,
+.import-detail-table td {
+  padding: 10px;
+  vertical-align: middle;
+}
+
+.import-detail-table td.sticky-col {
+  z-index: 5;
+  background: #fff;
+}
+
+.import-detail-table th.sticky-col {
+  z-index: 6;
+  background: #f7fbfd;
+}
+
+.import-detail-table tbody tr:hover td.sticky-col {
+  background: #f7fbfd;
+}
+
+.raw-score-col {
+  background: #fff;
+}
+
+.converted-score-col {
+  background: #fbfdfe;
 }
 
 .editor-card {
@@ -1055,6 +1398,14 @@ th.sticky-col {
   line-height: 1.35;
 }
 
+.score-converted {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .status-text-error {
   color: var(--color-danger);
   font-weight: 700;
@@ -1124,18 +1475,13 @@ th.sticky-col {
   gap: 16px;
 }
 
-.content-filter-row {
-  margin-bottom: 12px;
-  max-width: 280px;
-}
-
 .content-edit-shell {
   max-height: calc(92vh - 390px);
   overflow: auto;
 }
 
 .content-edit-table {
-  min-width: 900px;
+  min-width: 760px;
 }
 
 .content-edit-table th {
@@ -1156,10 +1502,6 @@ th.sticky-col {
   min-width: 108px;
 }
 
-.assess-select {
-  min-width: 180px;
-}
-
 .weight-input {
   min-width: 96px;
 }
@@ -1168,6 +1510,10 @@ th.sticky-col {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
+}
+
+.content-weight-summary.single {
+  grid-template-columns: minmax(220px, 360px);
 }
 
 .content-weight-summary > div {

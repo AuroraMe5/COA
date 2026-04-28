@@ -28,8 +28,8 @@ public class GradeService {
         return delegate.updateGradePreviewRow(batchId, payload);
     }
 
-    public Map<String, Object> confirmGradeBatch(String batchId) {
-        return delegate.confirmGradeBatch(batchId);
+    public Map<String, Object> confirmGradeBatch(String batchId, Map<String, Object> payload) {
+        return delegate.confirmGradeBatch(batchId, payload);
     }
 
     public Map<String, Object> getImportedGrades(Map<String, String> filters) {

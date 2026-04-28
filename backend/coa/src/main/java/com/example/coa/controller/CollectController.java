@@ -119,7 +119,7 @@ public class CollectController {
 
     @PostMapping("/grades/batches/{batchId}/confirm")
     public Map<String, Object> confirmGradeBatch(@PathVariable String batchId, @RequestBody(required = false) Map<String, Object> payload) {
-        return gradeService.confirmGradeBatch(batchId);
+        return gradeService.confirmGradeBatch(batchId, payload == null ? Map.of() : payload);
     }
 
     @GetMapping("/grades")
