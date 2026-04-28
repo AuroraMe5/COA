@@ -19,7 +19,9 @@ DROP TABLE IF EXISTS `teacher_reflection`;
 DROP TABLE IF EXISTS `student_eval_dimension`;
 DROP TABLE IF EXISTS `student_eval`;
 DROP TABLE IF EXISTS `student_grade`;
+DROP TABLE IF EXISTS `grade_import_preview`;
 DROP TABLE IF EXISTS `grade_import_batch`;
+DROP TABLE IF EXISTS `obj_assess_content_map`;
 DROP TABLE IF EXISTS `assess_content`;
 DROP TABLE IF EXISTS `class_course`;
 DROP TABLE IF EXISTS `base_student`;
@@ -360,6 +362,24 @@ CREATE TABLE `obj_assess_map` (
   CONSTRAINT `fk_obj_assess_map_assess_item` FOREIGN KEY (`assess_item_id`) REFERENCES `assess_item` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='目标考核映射表';
 
+CREATE TABLE `obj_assess_content_map` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '目标考核内容映射ID',
+  `objective_id` BIGINT NOT NULL COMMENT '教学目标ID',
+  `assess_item_id` BIGINT NOT NULL COMMENT '考核项目ID',
+  `assess_content_id` BIGINT NOT NULL COMMENT '考核内容ID',
+  `contribution_score` DECIMAL(6,2) NOT NULL DEFAULT 0.00 COMMENT '该内容计入目标的课程总成绩分值',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1有效 0停用',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_obj_content_map_scope` (`objective_id`, `assess_content_id`),
+  KEY `idx_obj_content_map_item` (`assess_item_id`),
+  KEY `idx_obj_content_map_content` (`assess_content_id`),
+  CONSTRAINT `fk_obj_content_map_objective` FOREIGN KEY (`objective_id`) REFERENCES `teach_objective` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_obj_content_map_assess_item` FOREIGN KEY (`assess_item_id`) REFERENCES `assess_item` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_obj_content_map_content` FOREIGN KEY (`assess_content_id`) REFERENCES `assess_content` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='目标-考核内容分值映射表';
+
 CREATE TABLE `parse_task` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '解析任务ID',
   `task_no` VARCHAR(40) NOT NULL COMMENT '任务编号',
@@ -470,6 +490,41 @@ CREATE TABLE `grade_import_batch` (
   CONSTRAINT `fk_grade_import_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`),
   CONSTRAINT `fk_grade_import_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成绩导入批次表';
+
+CREATE TABLE `grade_import_preview` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT 'preview row id',
+  `course_id` BIGINT NOT NULL COMMENT 'course id',
+  `class_id` BIGINT DEFAULT NULL COMMENT 'class id',
+  `student_id` BIGINT DEFAULT NULL COMMENT 'student id',
+  `assess_item_id` BIGINT NOT NULL COMMENT 'assessment item id',
+  `assess_content_id` BIGINT DEFAULT NULL COMMENT 'assessment content id',
+  `semester_id` BIGINT NOT NULL COMMENT 'semester id',
+  `import_batch_id` BIGINT NOT NULL COMMENT 'import batch id',
+  `student_no` VARCHAR(20) NOT NULL COMMENT 'student no',
+  `student_name` VARCHAR(50) NOT NULL COMMENT 'student name',
+  `raw_score` DECIMAL(6,2) DEFAULT NULL COMMENT 'raw score',
+  `raw_max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT 'raw max score',
+  `score` DECIMAL(6,2) NOT NULL COMMENT 'converted score',
+  `max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT 'converted max score',
+  `valid_flag` TINYINT NOT NULL DEFAULT 1 COMMENT '1 valid 0 invalid',
+  `error_message` VARCHAR(255) DEFAULT NULL COMMENT 'error message',
+  `created_by` BIGINT DEFAULT NULL COMMENT 'created by',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'created time',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'updated time',
+  PRIMARY KEY (`id`),
+  KEY `idx_grade_preview_batch` (`import_batch_id`),
+  KEY `idx_grade_preview_scope` (`course_id`, `semester_id`, `assess_item_id`),
+  KEY `idx_grade_preview_content` (`assess_content_id`),
+  KEY `idx_grade_preview_student` (`student_no`),
+  CONSTRAINT `fk_grade_preview_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
+  CONSTRAINT `fk_grade_preview_class` FOREIGN KEY (`class_id`) REFERENCES `base_class` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_grade_preview_student` FOREIGN KEY (`student_id`) REFERENCES `base_student` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_grade_preview_assess_item` FOREIGN KEY (`assess_item_id`) REFERENCES `assess_item` (`id`),
+  CONSTRAINT `fk_grade_preview_content` FOREIGN KEY (`assess_content_id`) REFERENCES `assess_content` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_grade_preview_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`),
+  CONSTRAINT `fk_grade_preview_batch` FOREIGN KEY (`import_batch_id`) REFERENCES `grade_import_batch` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_grade_preview_creator` FOREIGN KEY (`created_by`) REFERENCES `sys_user` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='grade import preview buffer';
 
 CREATE TABLE `student_grade` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '成绩记录ID',

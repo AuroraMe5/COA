@@ -1,15 +1,9 @@
 <template>
   <div class="app-page page-stack">
     <ModuleHeader
-      title="结果分析与教学改进"
-      description="按照需求梳理中的闭环逻辑，基于大纲目标、成绩数据和考核映射完成达成度核算，并输出课程目标达成情况报告。"
-    >
-      <template #actions>
-        <button class="btn btn-primary" :disabled="running" @click="runCalculation">
-          {{ running ? '核算中...' : '开始核算' }}
-        </button>
-      </template>
-    </ModuleHeader>
+      title="达成度核算"
+      description="基于课程目标、考核内容分值分配和已确认原始成绩完成达成度核算。"
+    />
 
     <div class="filter-bar">
       <div class="filter-field">
@@ -136,6 +130,100 @@
       </PanelCard>
     </div>
 
+    <PanelCard title="课程目标分值分配" subtitle="按考核内容设置其计入各课程目标的分值，合计后形成达成度汇总表中的目标实际得分。">
+      <template #actions>
+        <button class="btn btn-secondary" :disabled="mappingSaving" @click="saveContentMapping">
+          {{ mappingSaving ? '保存中...' : '保存分配矩阵' }}
+        </button>
+      </template>
+      <div v-if="!contentBlocks.length || !contentObjectives.length" class="notice info">
+        请先维护课程目标和考核内容，并完成成绩导入后再配置分配矩阵。
+      </div>
+      <div v-else class="content-map-block-stack">
+        <section v-for="block in contentBlocks" :key="block.assessItemId" class="content-map-block">
+          <header class="content-map-block-head">
+            <div>
+              <h3>{{ block.assessItemName }}</h3>
+              <p>
+                {{ block.assessItemTypeName || '考核项' }}
+                · 考核项权重 {{ formatScore(block.assessItemWeight) }}
+                · 考核内容 {{ block.contents.length }} 项
+              </p>
+            </div>
+            <div class="content-map-block-summary">
+              <StatusBadge
+                :text="`本块已分配 ${formatScore(blockAllocatedTotal(block))}`"
+                :tone="isBlockAllocationOk(block) ? 'success' : 'warning'"
+              />
+              <small>内容满分合计 {{ formatScore(blockContentMaxTotal(block)) }}</small>
+            </div>
+          </header>
+
+          <div class="table-shell content-map-shell">
+            <table class="data-table content-map-table">
+              <thead>
+                <tr>
+                  <th>序号</th>
+                  <th>考核内容</th>
+                  <th>类型</th>
+                  <th>内容满分</th>
+                  <th v-for="obj in contentObjectives" :key="obj.id">{{ obj.objCode }}</th>
+                  <th>已分配</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="content in block.contents" :key="content.assessContentId">
+                  <td class="mono">{{ content.contentNo }}</td>
+                  <td>
+                    <strong>{{ content.contentName }}</strong>
+                  </td>
+                  <td>{{ content.contentTypeName }}</td>
+                  <td>{{ formatScore(content.maxScore) }}</td>
+                  <td v-for="obj in contentObjectives" :key="obj.id">
+                    <input
+                      class="text-input matrix-input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      :value="contentMappingValue(obj.id, content.assessContentId)"
+                      @input="setContentMappingValue(obj.id, content.assessContentId, $event.target.value)"
+                    />
+                  </td>
+                  <td>
+                    <StatusBadge
+                      :text="formatScore(contentAllocatedTotal(content.assessContentId))"
+                      :tone="contentAllocatedTotal(content.assessContentId) <= Number(content.maxScore || 0) + 0.01 ? 'success' : 'warning'"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="4">本块目标小计</td>
+                  <td v-for="obj in contentObjectives" :key="obj.id">
+                    {{ formatScore(blockObjectiveAllocatedTotal(block, obj.id)) }}
+                  </td>
+                  <td>{{ formatScore(blockAllocatedTotal(block)) }}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+
+        <div class="content-map-total-strip">
+          <div
+            v-for="obj in contentObjectives"
+            :key="obj.id"
+            :class="{ warning: !isObjectiveAllocationOk(obj) }"
+          >
+            <span>{{ obj.objCode }} 目标合计</span>
+            <strong>{{ formatScore(objectiveAllocatedTotal(obj.id)) }} / {{ formatScore(obj.weight) }}</strong>
+            <small>{{ objectiveAllocationGapText(obj) }}</small>
+          </div>
+        </div>
+      </div>
+    </PanelCard>
+
     <PanelCard v-if="hasSmartAnalysis" title="智能分析">
       <div class="analysis-layout">
         <div class="analysis-main">
@@ -204,11 +292,11 @@
           <ChartPanel :option="assessRateChartOption" height="300px" />
         </div>
         <div class="chart-block">
-          <div class="chart-title">考核维度贡献</div>
+          <div class="chart-title">目标达成差距</div>
           <ChartPanel :option="componentChartOption" height="280px" />
         </div>
         <div class="chart-block">
-          <div class="chart-title">成绩确认情况</div>
+          <div class="chart-title">考核项表现与权重</div>
           <ChartPanel :option="coverageChartOption" height="280px" />
         </div>
       </div>
@@ -248,97 +336,66 @@
             <tr>
               <th>目标编号</th>
               <th v-if="record.config.calcMethod !== 'threshold'">平时</th>
-              <th v-if="record.config.calcMethod !== 'threshold'">期中</th>
-              <th v-if="record.config.calcMethod !== 'threshold'">期末</th>
+              <th v-if="record.config.calcMethod !== 'threshold'">实验</th>
+              <th v-if="record.config.calcMethod !== 'threshold'">考核</th>
               <th>{{ record.config.calcMethod === 'threshold' ? '班级达成率' : '达成值' }}</th>
               <th>目标权重</th>
               <th>状态</th>
             </tr>
           </thead>
           <tbody>
-            <template v-for="item in record.results" :key="item.objectiveId">
-              <tr>
+            <tr v-for="row in resultDisplayRows" :key="row.key" :class="{ 'detail-tr': row.type === 'detail' }">
+              <template v-if="row.type === 'main'">
                 <td>
-                  <strong>{{ item.objCode }}</strong>
-                  <small class="muted block-text">{{ item.objContent }}</small>
+                  <strong>{{ row.item.objCode }}</strong>
+                  <small class="muted block-text">{{ row.item.objContent }}</small>
                 </td>
-                <td v-if="record.config.calcMethod !== 'threshold'">{{ Number(item.normal).toFixed(3) }}</td>
-                <td v-if="record.config.calcMethod !== 'threshold'">{{ Number(item.mid).toFixed(3) }}</td>
-                <td v-if="record.config.calcMethod !== 'threshold'">{{ Number(item.final).toFixed(3) }}</td>
+                <td v-if="record.config.calcMethod !== 'threshold'">{{ Number(row.item.normal).toFixed(3) }}</td>
+                <td v-if="record.config.calcMethod !== 'threshold'">{{ Number(row.item.mid).toFixed(3) }}</td>
+                <td v-if="record.config.calcMethod !== 'threshold'">{{ Number(row.item.final).toFixed(3) }}</td>
                 <td class="metric">
                   {{ record.config.calcMethod === 'threshold'
-                    ? formatPercent(Number(item.achieveValue) * 100)
-                    : Number(item.achieveValue).toFixed(3) }}
+                    ? formatPercent(Number(row.item.achieveValue) * 100)
+                    : Number(row.item.achieveValue).toFixed(3) }}
                 </td>
-                <td>{{ formatPercent(item.objectiveWeight) }}</td>
+                <td>{{ formatPercent(row.item.objectiveWeight) }}</td>
                 <td>
-                  <StatusBadge :text="item.isAchieved ? '达成' : '未达成'" :tone="item.isAchieved ? 'success' : 'danger'" />
+                  <StatusBadge :text="row.item.isAchieved ? '达成' : '未达成'" :tone="row.item.isAchieved ? 'success' : 'danger'" />
                 </td>
-              </tr>
-              <tr v-if="item.details?.length && record.config.calcMethod !== 'threshold'" class="detail-tr">
+              </template>
+              <template v-else>
                 <td colspan="7">
                   <div class="detail-chip-grid">
-                    <div v-for="detail in item.details" :key="detail.assessItemId" class="detail-chip">
+                    <div v-for="detail in row.item.details" :key="detail.assessItemId" class="detail-chip">
                       <strong>{{ detail.itemName }}</strong>
                       <span>{{ detail.itemTypeName }} · 得分率 {{ Number(detail.scoreRate).toFixed(3) }}</span>
                       <span>贡献权重 {{ formatPercent(detail.contributionWeight) }} · 贡献值 {{ Number(detail.achieveValue).toFixed(3) }}</span>
                     </div>
                   </div>
                 </td>
-              </tr>
-            </template>
+              </template>
+            </tr>
           </tbody>
         </table>
       </div>
     </PanelCard>
 
-    <PanelCard v-if="hasCalcResult" title="导出达成度报告" subtitle="生成包含课程概况、成绩统计、目标达成分析和学生明细附录的 Word 报告。">
-      <div class="export-section">
-        <div v-if="reportMeta" class="meta-preview">
-          <StatCard label="参与学生" :value="`${reportMeta.studentCount} 人`" tone="primary" />
-          <StatCard label="低达成度学生" :value="`${reportMeta.weakStudentCount} 人`" :tone="reportMeta.weakStudentCount > 0 ? 'warning' : 'success'" />
-          <StatCard
-            v-for="obj in reportMeta.objectives"
-            :key="obj.id"
-            :label="obj.name"
-            :value="`${(Number(obj.achievement || 0) * 100).toFixed(1)}%`"
-            :helper="obj.judgement"
-            :tone="Number(obj.achievement || 0) >= 0.6 ? 'success' : 'warning'"
-          />
-        </div>
-
-        <div v-if="reportMeta?.smartAnalysis" class="report-analysis">
-          <strong>报告智能摘要</strong>
-          <p>{{ reportMeta.smartAnalysis.summary }}</p>
-          <div class="report-actions">
-            <span v-for="item in reportMeta.smartAnalysis.improvements" :key="item">{{ item }}</span>
-          </div>
-        </div>
-
-        <p class="export-desc">
-          报告将包含：课程概况、课程目标对毕业要求的支撑、成绩评定方法、成绩统计与试题分析、课程目标达成度计算与分析、总结与改进，以及全体学生明细附录。
-        </p>
-
-        <div class="export-actions">
-          <button class="btn btn-light" :disabled="metaLoading" @click="loadReportMeta">
-            {{ metaLoading ? '读取中...' : '预览报告信息' }}
-          </button>
-          <button class="btn btn-primary" :disabled="downloading" @click="handleDownload">
-            {{ downloading ? '生成中...' : '下载达成度报告（.docx）' }}
-          </button>
-        </div>
-
-        <div v-if="downloading" class="notice info">
-          正在生成报告，请稍候（通常需要 5~15 秒）。
-        </div>
-      </div>
-    </PanelCard>
+    <div class="page-bottom-actions">
+      <button class="btn btn-primary" :disabled="running" @click="runCalculation">
+        {{ running ? '核算中...' : '开始核算' }}
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { downloadReport, getAchievementCalculation, getReportPreviewMeta, runAchievementCalculation } from '@/api'
+import {
+  getAchievementCalculation,
+  getAchievementContentMapping,
+  runAchievementCalculation,
+  saveAchievementContentMapping
+} from '@/api'
 import ChartPanel from '@/components/common/ChartPanel.vue'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
@@ -376,15 +433,28 @@ const record = reactive({
 
 const running = ref(false)
 const currentOutlineId = ref(null)
-const reportMeta = ref(null)
-const metaLoading = ref(false)
-const downloading = ref(false)
+const contentObjectives = ref([])
+const contentColumns = ref([])
+const contentRows = ref([])
+const mappingSaving = ref(false)
 const message = reactive({
   type: 'success',
   text: ''
 })
-
-const hasCalcResult = computed(() => Boolean(record.generatedAt || record.results?.length))
+const PIE_CHART_COLORS = [
+  '#2563eb',
+  '#16a34a',
+  '#f59e0b',
+  '#7c3aed',
+  '#0891b2',
+  '#db2777',
+  '#65a30d',
+  '#ea580c',
+  '#0f766e',
+  '#4f46e5',
+  '#be123c',
+  '#9333ea'
+]
 
 const hasSmartAnalysis = computed(() => Boolean(record.smartAnalysis?.summary))
 
@@ -394,6 +464,35 @@ const hasChartData = computed(() => {
     record.dataSummary?.assessItems?.length ||
     Number(record.dataSummary?.confirmedGradeRows || 0) + Number(record.dataSummary?.pendingGradeRows || 0) > 0
   )
+})
+
+const resultDisplayRows = computed(() => {
+  const rows = []
+  for (const item of record.results || []) {
+    rows.push({ key: `${item.objectiveId}-main`, type: 'main', item })
+    if (item.details?.length && record.config.calcMethod !== 'threshold') {
+      rows.push({ key: `${item.objectiveId}-details`, type: 'detail', item })
+    }
+  }
+  return rows
+})
+
+const contentBlocks = computed(() => {
+  const blockMap = new Map()
+  for (const content of contentColumns.value || []) {
+    const key = String(content.assessItemId || content.assessItemName || 'unknown')
+    if (!blockMap.has(key)) {
+      blockMap.set(key, {
+        assessItemId: key,
+        assessItemName: content.assessItemName || '未命名考核项',
+        assessItemTypeName: content.assessItemTypeName || '',
+        assessItemWeight: Number(content.assessItemWeight || 0),
+        contents: []
+      })
+    }
+    blockMap.get(key).contents.push(content)
+  }
+  return Array.from(blockMap.values())
 })
 
 const riskLabel = computed(() => {
@@ -502,63 +601,139 @@ const assessRateChartOption = computed(() => {
 })
 
 const componentChartOption = computed(() => {
-  const data = record.chartData?.componentBars?.length
-    ? record.chartData.componentBars
-    : [
-        { name: '平时', value: averageMetric('normal') },
-        { name: '期中', value: averageMetric('mid') },
-        { name: '期末', value: averageMetric('final') }
-      ]
+  const threshold = rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.7)
+  const data = (record.chartData?.objectiveBars?.length ? record.chartData.objectiveBars : record.results)
+    .map((item) => {
+      const value = rateToPercent(item.value ?? item.achieveValue)
+      return {
+        name: item.name || item.objCode,
+        value,
+        gap: Math.max(0, Number((threshold - value).toFixed(1))),
+        achieved: item.achieved ?? item.isAchieved
+      }
+    })
+    .sort((left, right) => right.gap - left.gap || left.value - right.value)
+  const maxValue = Math.max(100, threshold, ...data.map((item) => item.value + item.gap))
   return {
+    color: ['#2563eb', '#f59e0b'],
     tooltip: {
       trigger: 'axis',
-      valueFormatter: (value) => `${Number(value || 0).toFixed(1)}%`
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        const item = data[params?.[0]?.dataIndex] || {}
+        return [
+          `<strong>${item.name || ''}</strong>`,
+          `当前达成度：${Number(item.value || 0).toFixed(1)}%`,
+          `达成阈值：${Number(threshold || 0).toFixed(1)}%`,
+          item.gap > 0 ? `距离阈值：${Number(item.gap).toFixed(1)}%` : '已达到阈值'
+        ].join('<br/>')
+      }
     },
-    grid: { left: 42, right: 24, top: 28, bottom: 36 },
+    legend: { top: 0, right: 8 },
+    grid: { left: 72, right: 24, top: 36, bottom: 32 },
     xAxis: {
-      type: 'category',
-      data: data.map((item) => item.name)
-    },
-    yAxis: {
       type: 'value',
       min: 0,
-      max: 100,
+      max: maxValue,
       axisLabel: { formatter: '{value}%' }
     },
-    series: [{
-      name: '贡献值',
-      type: 'bar',
-      barMaxWidth: 42,
-      itemStyle: { color: '#0f766e' },
-      data: data.map((item) => rateToPercent(item.value))
-    }]
+    yAxis: {
+      type: 'category',
+      data: data.map((item) => item.name),
+      axisLabel: {
+        width: 58,
+        overflow: 'truncate'
+      }
+    },
+    series: [
+      {
+        name: '当前达成度',
+        type: 'bar',
+        stack: 'gap',
+        barMaxWidth: 22,
+        data: data.map((item) => ({
+          value: item.value,
+          itemStyle: { color: item.achieved ? '#2563eb' : '#c2410c' }
+        })),
+        markLine: {
+          symbol: 'none',
+          lineStyle: { color: '#b7791f', type: 'dashed' },
+          label: { formatter: '阈值' },
+          data: [{ xAxis: threshold }]
+        }
+      },
+      {
+        name: '距离阈值',
+        type: 'bar',
+        stack: 'gap',
+        barMaxWidth: 22,
+        data: data.map((item) => item.gap),
+        itemStyle: { color: '#f59e0b' }
+      }
+    ]
   }
 })
 
 const coverageChartOption = computed(() => {
-  const coverage = record.chartData?.gradeCoverage?.length
-    ? record.chartData.gradeCoverage
-    : [
-        { name: '已确认成绩', value: Number(record.dataSummary.confirmedGradeRows || 0) },
-        { name: '待确认成绩', value: Number(record.dataSummary.pendingGradeRows || 0) }
-      ]
+  const threshold = rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.7)
+  const data = (record.dataSummary.assessItems || []).map((item) => ({
+    name: item.itemName,
+    typeName: item.itemTypeName,
+    confirmedRows: Number(item.confirmedRows || 0),
+    pendingRows: Number(item.pendingRows || 0),
+    avgRate: rateToPercent(item.avgRate),
+    weight: Number(item.weight || 0)
+  }))
+  const coloredData = assignDistinctPieColors(data)
   return {
-    color: ['#2f855a', '#d97706'],
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0, left: 'center' },
+    color: PIE_CHART_COLORS,
+    tooltip: {
+      trigger: 'item',
+      formatter: ({ data: item }) => [
+        `<strong>${item.name}</strong>`,
+        `类型：${item.typeName || '--'}`,
+        `平均得分率：${Number(item.avgRate || 0).toFixed(1)}%`,
+        `已确认记录：${item.confirmedRows}`,
+        `待确认记录：${item.pendingRows}`,
+        `考核权重：${Number(item.weight || 0).toFixed(2)}%`,
+        Number(item.avgRate || 0) >= threshold ? '状态：达到阈值' : '状态：低于阈值'
+      ].join('<br/>')
+    },
+    legend: {
+      type: 'scroll',
+      bottom: 0,
+      left: 'center'
+    },
     series: [{
-      name: '成绩记录',
+      name: '考核项权重',
       type: 'pie',
-      radius: ['48%', '72%'],
-      center: ['50%', '44%'],
+      radius: ['42%', '70%'],
+      center: ['50%', '43%'],
+      minAngle: 8,
       avoidLabelOverlap: true,
-      label: {
-        formatter: '{b}\n{c} 条'
-      },
-      data: coverage.map((item) => ({
+      data: coloredData.map((item) => ({
         name: item.name,
-        value: Number(item.value || 0)
-      }))
+        value: item.weight,
+        ...item,
+        itemStyle: {
+          color: item.color,
+          borderColor: pieStatusBorderColor(item, threshold),
+          borderWidth: item.confirmedRows === 0 || item.avgRate < threshold ? 3 : 1,
+          opacity: 0.9
+        }
+      })),
+      label: {
+        show: true,
+        formatter: ({ data: item }) => `${item.name}\n${Number(item.value || 0).toFixed(1)}%`,
+        color: '#334155',
+        fontSize: 11
+      },
+      emphasis: {
+        label: {
+          show: true,
+          fontWeight: 700
+        }
+      }
     }]
   }
 })
@@ -579,6 +754,7 @@ function defaultDataSummary() {
     objectiveCount: 0,
     assessItemCount: 0,
     mappingCount: 0,
+    contentMappingCount: 0,
     confirmedGradeRows: 0,
     pendingGradeRows: 0,
     assessItems: [],
@@ -613,13 +789,36 @@ function rateToPercent(value) {
   return Number((Number(value || 0) * 100).toFixed(1))
 }
 
-function averageMetric(key) {
-  const rows = record.results || []
-  if (!rows.length) {
-    return 0
+function assignDistinctPieColors(items) {
+  const assigned = []
+  return items.map((item, index) => {
+    const color = pickPieColor(index, items.length, assigned)
+    assigned.push(color)
+    return { ...item, color }
+  })
+}
+
+function pickPieColor(index, total, assigned) {
+  const previous = assigned[index - 1]
+  const first = assigned[0]
+  for (let offset = 0; offset < PIE_CHART_COLORS.length; offset += 1) {
+    const color = PIE_CHART_COLORS[(index + offset) % PIE_CHART_COLORS.length]
+    if (color === previous) {
+      continue
+    }
+    if (total > 1 && index === total - 1 && color === first) {
+      continue
+    }
+    return color
   }
-  const total = rows.reduce((sum, item) => sum + Number(item[key] || 0), 0)
-  return total / rows.length
+  return PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]
+}
+
+function pieStatusBorderColor(item, threshold) {
+  if (item.confirmedRows === 0) {
+    return '#64748b'
+  }
+  return Number(item.avgRate || 0) >= threshold ? '#ffffff' : '#991b1b'
 }
 
 function setMessage(type, text) {
@@ -648,16 +847,132 @@ function formatPercent(value) {
   return `${Number(value || 0).toFixed(2)}%`
 }
 
+function formatScore(value) {
+  return Number(value || 0).toFixed(2)
+}
+
+function contentRow(objectiveId) {
+  return contentRows.value.find((row) => Number(row.objectiveId) === Number(objectiveId))
+}
+
+function contentMappingValue(objectiveId, contentId) {
+  return contentRow(objectiveId)?.values?.[String(contentId)] ?? ''
+}
+
+function setContentMappingValue(objectiveId, contentId, value) {
+  let row = contentRow(objectiveId)
+  if (!row) {
+    row = { objectiveId, values: {} }
+    contentRows.value.push(row)
+  }
+  if (!row.values) {
+    row.values = {}
+  }
+  row.values[String(contentId)] = value === '' ? '' : Number(value)
+}
+
+function contentAllocatedTotal(contentId) {
+  return contentRows.value.reduce((sum, row) => {
+    return sum + Number(row.values?.[String(contentId)] || 0)
+  }, 0)
+}
+
+function objectiveAllocatedTotal(objectiveId) {
+  const row = contentRow(objectiveId)
+  if (!row?.values) {
+    return 0
+  }
+  return Object.values(row.values).reduce((sum, value) => sum + Number(value || 0), 0)
+}
+
+function blockContentMaxTotal(block) {
+  return (block?.contents || []).reduce((sum, content) => sum + Number(content.maxScore || 0), 0)
+}
+
+function blockAllocatedTotal(block) {
+  return (block?.contents || []).reduce((sum, content) => {
+    return sum + contentAllocatedTotal(content.assessContentId)
+  }, 0)
+}
+
+function blockObjectiveAllocatedTotal(block, objectiveId) {
+  return (block?.contents || []).reduce((sum, content) => {
+    return sum + Number(contentMappingValue(objectiveId, content.assessContentId) || 0)
+  }, 0)
+}
+
+function isBlockAllocationOk(block) {
+  const target = blockContentMaxTotal(block)
+  return target <= 0 || blockAllocatedTotal(block) <= target + 0.01
+}
+
+function isObjectiveAllocationOk(objective) {
+  return Math.abs(objectiveAllocatedTotal(objective.id) - Number(objective.weight || 0)) <= 0.01
+}
+
+function objectiveAllocationGapText(objective) {
+  const delta = objectiveAllocatedTotal(objective.id) - Number(objective.weight || 0)
+  if (Math.abs(delta) <= 0.01) {
+    return '已对齐'
+  }
+  return delta > 0 ? `超出 ${formatScore(delta)}` : `需补 ${formatScore(Math.abs(delta))}`
+}
+
+function normalizeContentMappingRows() {
+  return contentRows.value.map((row) => ({
+    objectiveId: row.objectiveId,
+    values: { ...(row.values || {}) }
+  }))
+}
+
+async function loadContentMapping() {
+  if (!filters.courseId || !filters.semester) {
+    contentObjectives.value = []
+    contentColumns.value = []
+    contentRows.value = []
+    return
+  }
+  const data = await getAchievementContentMapping(filters)
+  contentObjectives.value = data.objectives || []
+  contentColumns.value = data.contents || []
+  contentRows.value = data.rows || []
+}
+
+async function saveContentMapping() {
+  if (!filters.courseId || !filters.semester) {
+    setMessage('error', '请先选择课程和学期。')
+    return
+  }
+  mappingSaving.value = true
+  try {
+    const data = await saveAchievementContentMapping({
+      courseId: filters.courseId,
+      semester: filters.semester,
+      rows: normalizeContentMappingRows()
+    })
+    await loadContentMapping()
+    setMessage('success', `分配矩阵已保存，共写入 ${data.count || 0} 条分值配置。`)
+  } catch (error) {
+    setMessage('error', error.message || '分配矩阵保存失败。')
+  } finally {
+    mappingSaving.value = false
+  }
+}
+
 async function loadPage() {
-  const data = await getAchievementCalculation(filters)
-  catalogs.courses = data.courses
-  catalogs.semesters = data.semesters
-  filters.courseId = data.currentCourseId
-  filters.semester = data.currentSemester
-  currentOutlineId.value = data.outlineId
-  reportMeta.value = null
-  objectives.value = data.objectives || []
-  applyRecord(data.record)
+  try {
+    const data = await getAchievementCalculation(filters)
+    catalogs.courses = data.courses
+    catalogs.semesters = data.semesters
+    filters.courseId = data.currentCourseId
+    filters.semester = data.currentSemester
+    currentOutlineId.value = data.outlineId
+    objectives.value = data.objectives || []
+    applyRecord(data.record)
+    await loadContentMapping()
+  } catch (error) {
+    setMessage('error', error.message || '达成度核算数据读取失败。')
+  }
 }
 
 async function runCalculation() {
@@ -668,7 +983,8 @@ async function runCalculation() {
       semester: filters.semester,
       calcMethod: record.config.calcMethod,
       thresholdValue: record.config.thresholdValue,
-      passThreshold: record.config.passThreshold
+      passThreshold: record.config.passThreshold,
+      contentMappingRows: normalizeContentMappingRows()
     }
     if (record.config.calcMethod === 'custom') {
       payload.customThresholds = record.config.customThresholds
@@ -676,55 +992,14 @@ async function runCalculation() {
     }
     const data = await runAchievementCalculation(payload)
     currentOutlineId.value = data.outlineId
-    reportMeta.value = null
     objectives.value = data.objectives || []
     applyRecord(data.record)
+    await loadContentMapping()
     setMessage('success', '达成度核算已完成，结果已更新。')
   } catch (error) {
     setMessage('error', error.message || '核算失败。')
   } finally {
     running.value = false
-  }
-}
-
-function assertReportParams() {
-  if (!currentOutlineId.value) {
-    setMessage('error', '当前课程学期尚未建立课程大纲，暂不能生成报告。')
-    return false
-  }
-  if (!record.config.calcRuleId) {
-    setMessage('error', '请先完成一次达成度核算，再生成报告。')
-    return false
-  }
-  return true
-}
-
-async function loadReportMeta() {
-  if (!assertReportParams()) {
-    return
-  }
-  metaLoading.value = true
-  try {
-    reportMeta.value = await getReportPreviewMeta(currentOutlineId.value, record.config.calcRuleId)
-  } catch (error) {
-    setMessage('error', error.message || '报告信息读取失败。')
-  } finally {
-    metaLoading.value = false
-  }
-}
-
-async function handleDownload() {
-  if (!assertReportParams()) {
-    return
-  }
-  downloading.value = true
-  try {
-    await downloadReport(currentOutlineId.value, record.config.calcRuleId)
-    setMessage('success', '达成度报告已生成。')
-  } catch (error) {
-    setMessage('error', error.message || '报告生成失败。')
-  } finally {
-    downloading.value = false
   }
 }
 
@@ -795,6 +1070,118 @@ onMounted(loadPage)
 
 .inline-input {
   width: 100px;
+  padding: 6px 8px;
+}
+
+.content-map-block-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.content-map-block {
+  border: 1px solid #dfeaf0;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.content-map-block-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e8f0f4;
+  background: #f8fbfd;
+}
+
+.content-map-block-head h3 {
+  margin: 0;
+  color: var(--color-primary-deep);
+  font-size: 16px;
+}
+
+.content-map-block-head p {
+  margin: 6px 0 0;
+  color: var(--color-text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.content-map-block-summary {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.content-map-block-summary small {
+  color: var(--color-text-soft);
+  font-size: 12px;
+}
+
+.content-map-shell {
+  border: 0;
+  border-radius: 0;
+}
+
+.content-map-table {
+  min-width: 860px;
+}
+
+.content-map-table th,
+.content-map-table td {
+  white-space: nowrap;
+}
+
+.content-map-table tfoot td {
+  font-weight: 700;
+  background: #f8fbfd;
+}
+
+.content-map-total-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.content-map-total-strip div {
+  padding: 12px;
+  border: 1px solid #cfe2ea;
+  border-radius: 8px;
+  background: #fbfdfe;
+}
+
+.content-map-total-strip div.warning {
+  border-color: #f2d39b;
+  background: #fffaf0;
+}
+
+.content-map-total-strip span,
+.content-map-total-strip strong,
+.content-map-total-strip small {
+  display: block;
+}
+
+.content-map-total-strip span {
+  color: var(--color-text-soft);
+  font-size: 13px;
+}
+
+.content-map-total-strip strong {
+  margin-top: 6px;
+  color: var(--color-primary-deep);
+  font-size: 18px;
+}
+
+.content-map-total-strip small {
+  margin-top: 4px;
+  color: var(--color-text-soft);
+  font-size: 12px;
+}
+
+.matrix-input {
+  width: 96px;
   padding: 6px 8px;
 }
 
@@ -991,6 +1378,12 @@ onMounted(loadPage)
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.page-bottom-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 0 12px;
 }
 
 .mt-8 {

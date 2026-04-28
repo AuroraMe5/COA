@@ -334,6 +334,10 @@ export function confirmGradeBatch(batchId, payload) {
   return postData(`/collect/grades/batches/${batchId}/confirm`, payload)
 }
 
+export function discardGradeBatch(batchId) {
+  return request.delete(`/collect/grades/batches/${batchId}`).then(({ data }) => data)
+}
+
 // 达成度核算与分析
 export function getAchievementCalculation(params) {
   return getData('/achieve/results', { params })
@@ -341,6 +345,14 @@ export function getAchievementCalculation(params) {
 
 export function runAchievementCalculation(payload) {
   return postData('/achieve/tasks', payload)
+}
+
+export function getAchievementContentMapping(params) {
+  return getData('/achieve/content-maps', { params })
+}
+
+export function saveAchievementContentMapping(payload) {
+  return postData('/achieve/content-maps', payload)
 }
 
 export function getReportPreviewMeta(outlineId, calcRuleId) {

@@ -12,6 +12,7 @@ import ObjectiveMapping from '@/views/objectives/ObjectiveMapping.vue'
 import ClassCollectView from '@/views/collect/ClassCollectView.vue'
 import GradeManageView from '@/views/collect/GradeManageView.vue'
 import AchievementCalculation from '@/views/analysis/AchievementCalculation.vue'
+import AchievementReportView from '@/views/analysis/AchievementReportView.vue'
 
 // meta.title 目前主要用于路由语义和后续扩展。
 // 头部组件已经不再直接把它渲染成大标题，因此不会再出现“左上角重复标题”的问题。
@@ -95,7 +96,13 @@ const routes = [
         path: 'analysis/calculation',
         name: 'analysis-calculation',
         component: AchievementCalculation,
-        meta: { title: '结果分析与教学改进' }
+        meta: { title: '达成度核算' }
+      },
+      {
+        path: 'analysis/report',
+        name: 'analysis-report',
+        component: AchievementReportView,
+        meta: { title: '报告预览和导出' }
       }
     ]
   },

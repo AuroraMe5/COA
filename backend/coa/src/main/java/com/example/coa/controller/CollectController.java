@@ -122,6 +122,11 @@ public class CollectController {
         return gradeService.confirmGradeBatch(batchId, payload == null ? Map.of() : payload);
     }
 
+    @DeleteMapping("/grades/batches/{batchId}")
+    public Map<String, Object> discardGradeBatch(@PathVariable String batchId) {
+        return gradeService.discardGradeBatch(batchId);
+    }
+
     @GetMapping("/grades")
     public Map<String, Object> getImportedGrades(
         @RequestParam(required = false) String courseId,

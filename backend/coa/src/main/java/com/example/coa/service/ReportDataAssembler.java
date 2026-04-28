@@ -131,8 +131,14 @@ public class ReportDataAssembler {
         ctx.objectives = loadObjectives(outlineId);
         ctx.assessItems = loadAssessItems(outlineId);
         ctx.objAssessMaps = loadObjAssessMaps(outlineId);
+        ctx.objAssessContentMaps = loadObjAssessContentMaps(outlineId);
         Map<Long, AchievementResultRow> resultRows = loadAchievementResults(courseId, semesterId, effectiveCalcRuleId);
-        ctx.objectiveAchievements = buildObjectiveAchievements(ctx.objectives, resultRows, ruleInfo.thresholdValue);
+        ctx.objectiveAchievements = buildObjectiveAchievements(
+            ctx.objectives,
+            resultRows,
+            ruleInfo.thresholdValue,
+            objectiveContentTargetScores(ctx.objAssessContentMaps)
+        );
         ctx.overallAchievement = loadOverallAchievement(courseId, semesterId, effectiveCalcRuleId);
 
         StudentReportData studentData = buildStudentReportData(ctx, semesterId, ruleInfo);
@@ -211,6 +217,31 @@ public class ReportDataAssembler {
         ));
     }
 
+    private List<ObjAssessContentMapInfo> loadObjAssessContentMaps(Long outlineId) {
+        return jdbcTemplate.query("""
+            SELECT
+                m.objective_id,
+                m.assess_item_id,
+                m.assess_content_id,
+                m.contribution_score,
+                ac.content_type
+            FROM obj_assess_content_map m
+            JOIN teach_objective t ON t.id = m.objective_id
+            JOIN assess_content ac ON ac.id = m.assess_content_id
+            WHERE t.outline_id = :outlineId
+              AND m.status = 1
+              AND m.contribution_score > 0
+              AND ac.status = 1
+            ORDER BY t.sort_order ASC, t.id ASC, m.assess_item_id ASC, ac.sort_order ASC, ac.id ASC
+            """, params("outlineId", outlineId), (rs, rowNum) -> new ObjAssessContentMapInfo(
+            rs.getLong("objective_id"),
+            rs.getLong("assess_item_id"),
+            rs.getLong("assess_content_id"),
+            rs.getDouble("contribution_score"),
+            normalizeAssessContentType(rs.getString("content_type"))
+        ));
+    }
+
     private Map<Long, AchievementResultRow> loadAchievementResults(long courseId, long semesterId, Long calcRuleId) {
         List<AchievementResultRow> rows = jdbcTemplate.query("""
             SELECT objective_id, normal_score, mid_score, final_score, achieve_value, is_achieved
@@ -242,13 +273,14 @@ public class ReportDataAssembler {
     private List<ObjectiveAchievement> buildObjectiveAchievements(
         List<ObjectiveInfo> objectives,
         Map<Long, AchievementResultRow> resultRows,
-        double thresholdValue
+        double thresholdValue,
+        Map<Long, Double> objectiveTargetScores
     ) {
         List<ObjectiveAchievement> result = new ArrayList<>();
         for (ObjectiveInfo objective : objectives) {
             AchievementResultRow row = resultRows.get(objective.id);
             double achievement = row == null ? 0D : row.achievement;
-            double totalScore = objective.weight;
+            double totalScore = objectiveTargetScores.getOrDefault(objective.id, objective.weight);
             result.add(new ObjectiveAchievement(
                 objective.id,
                 objective.code,
@@ -288,10 +320,22 @@ public class ReportDataAssembler {
     private StudentReportData buildStudentReportData(ReportContext ctx, long semesterId, CalcRuleInfo ruleInfo) {
         Map<Long, AssessItemInfo> assessById = ctx.assessItems.stream()
             .collect(Collectors.toMap(item -> item.id, item -> item, (left, right) -> left, LinkedHashMap::new));
-        Map<Long, Map<String, Double>> itemStudentRates = computeItemStudentRates(ctx.outlineId, semesterId, ruleInfo.retakeEnabled);
         Map<String, String> studentNames = loadStudentNames(ctx.outlineId, semesterId);
 
         StudentReportData data = new StudentReportData();
+        if (!ctx.objAssessContentMaps.isEmpty()) {
+            Map<Long, Map<String, Double>> contentStudentRates = computeContentStudentRates(ctx.outlineId, semesterId, ruleInfo.retakeEnabled);
+            data.studentScoreSummaries = buildStudentScoreSummariesFromContents(ctx.objAssessContentMaps, contentStudentRates, studentNames);
+            data.gradeDistribution = buildDistribution(data.studentScoreSummaries.stream()
+                .map(item -> item.totalScore)
+                .toList());
+            data.componentStats = buildComponentStatsFromContents(ctx.objAssessContentMaps, contentStudentRates);
+            buildObjectiveStudentDetailsFromContents(ctx, contentStudentRates, studentNames, data);
+            data.objectiveBandAchievements = buildObjectiveBandAchievements(ctx.objectives, data.studentDetails, data.studentScoreSummaries);
+            return data;
+        }
+
+        Map<Long, Map<String, Double>> itemStudentRates = computeItemStudentRates(ctx.outlineId, semesterId, ruleInfo.retakeEnabled);
         data.studentScoreSummaries = buildStudentScoreSummaries(assessById, itemStudentRates, studentNames);
         data.gradeDistribution = buildDistribution(data.studentScoreSummaries.stream()
             .map(item -> item.totalScore)
@@ -357,6 +401,62 @@ public class ReportDataAssembler {
         return result;
     }
 
+    private Map<Long, Map<String, Double>> computeContentStudentRates(long outlineId, long semesterId, boolean retakeEnabled) {
+        List<ContentGradeRow> rows = jdbcTemplate.query("""
+            SELECT sg.id, sg.assess_item_id, sg.assess_content_id, sg.student_no, sg.score, sg.max_score
+            FROM student_grade sg
+            JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
+            WHERE sg.semester_id = :semesterId
+              AND sg.valid_flag = 1
+              AND sg.assess_content_id IS NOT NULL
+              AND gb.status = 'CONFIRMED'
+              AND sg.assess_item_id IN (
+                  SELECT id FROM assess_item WHERE outline_id = :outlineId
+              )
+            ORDER BY sg.assess_content_id ASC, sg.student_no ASC, sg.id ASC
+            """, new MapSqlParameterSource()
+            .addValue("outlineId", outlineId)
+            .addValue("semesterId", semesterId), (rs, rowNum) -> new ContentGradeRow(
+            rs.getLong("id"),
+            rs.getLong("assess_item_id"),
+            rs.getLong("assess_content_id"),
+            rs.getString("student_no"),
+            rs.getDouble("score"),
+            rs.getDouble("max_score")
+        ));
+
+        Map<Long, Map<String, List<ContentGradeRow>>> grouped = new LinkedHashMap<>();
+        for (ContentGradeRow row : rows) {
+            grouped.computeIfAbsent(row.assessContentId, key -> new LinkedHashMap<>())
+                .computeIfAbsent(row.studentNo, key -> new ArrayList<>())
+                .add(row);
+        }
+
+        Map<Long, Map<String, Double>> result = new LinkedHashMap<>();
+        for (Map.Entry<Long, Map<String, List<ContentGradeRow>>> contentEntry : grouped.entrySet()) {
+            Map<String, Double> studentRates = new LinkedHashMap<>();
+            for (Map.Entry<String, List<ContentGradeRow>> studentEntry : contentEntry.getValue().entrySet()) {
+                List<ContentGradeRow> grades = studentEntry.getValue();
+                double rate;
+                if (retakeEnabled && grades.size() >= 2) {
+                    ContentGradeRow first = grades.get(0);
+                    double original = first.maxScore > 0 ? first.score / first.maxScore : 0D;
+                    double bestRetake = grades.subList(1, grades.size()).stream()
+                        .mapToDouble(item -> item.maxScore > 0 ? item.score / item.maxScore * 0.8D : 0D)
+                        .max()
+                        .orElse(0D);
+                    rate = Math.max(original, bestRetake);
+                } else {
+                    ContentGradeRow latest = grades.get(grades.size() - 1);
+                    rate = latest.maxScore > 0 ? latest.score / latest.maxScore : 0D;
+                }
+                studentRates.put(studentEntry.getKey(), round4(rate));
+            }
+            result.put(contentEntry.getKey(), studentRates);
+        }
+        return result;
+    }
+
     private Map<String, String> loadStudentNames(long outlineId, long semesterId) {
         return jdbcTemplate.query("""
             SELECT sg.student_no, MAX(sg.student_name) AS student_name
@@ -364,7 +464,6 @@ public class ReportDataAssembler {
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.semester_id = :semesterId
               AND sg.valid_flag = 1
-              AND sg.assess_content_id IS NULL
               AND gb.status = 'CONFIRMED'
               AND sg.assess_item_id IN (
                   SELECT id FROM assess_item WHERE outline_id = :outlineId
@@ -414,6 +513,39 @@ public class ReportDataAssembler {
             .toList();
     }
 
+    private List<StudentScoreSummary> buildStudentScoreSummariesFromContents(
+        List<ObjAssessContentMapInfo> contentMaps,
+        Map<Long, Map<String, Double>> contentStudentRates,
+        Map<String, String> studentNames
+    ) {
+        Map<Long, ContentAllocation> allocations = contentAllocations(contentMaps);
+        Set<String> students = studentsFromContentRates(allocations.keySet(), contentStudentRates);
+        students.addAll(studentNames.keySet());
+
+        List<StudentScoreSummary> summaries = new ArrayList<>();
+        for (String studentNo : students) {
+            StudentScoreSummary summary = new StudentScoreSummary(studentNo, studentNames.getOrDefault(studentNo, ""));
+            for (Map.Entry<Long, ContentAllocation> entry : allocations.entrySet()) {
+                double score = contentStudentRates.getOrDefault(entry.getKey(), Map.of())
+                    .getOrDefault(studentNo, 0D) * entry.getValue().score;
+                String contentType = entry.getValue().contentType;
+                if ("exam".equals(contentType)) {
+                    summary.finalScore = round2(summary.finalScore + score);
+                } else if ("experiment".equals(contentType)) {
+                    summary.practiceScore = round2(summary.practiceScore + score);
+                } else {
+                    summary.normalScore = round2(summary.normalScore + score);
+                }
+                summary.totalScore = round2(summary.totalScore + score);
+            }
+            summary.gradeLevel = gradeLevel(summary.totalScore);
+            summaries.add(summary);
+        }
+        return summaries.stream()
+            .sorted(Comparator.comparing(item -> item.studentNo))
+            .toList();
+    }
+
     private List<ComponentStat> buildComponentStats(
         List<AssessItemInfo> assessItems,
         Map<Long, Map<String, Double>> itemStudentRates
@@ -451,6 +583,51 @@ public class ReportDataAssembler {
                 round2(min),
                 students.isEmpty() ? 0D : round4((double) passCount / students.size()),
                 groupWeight
+            ));
+        }
+        return result;
+    }
+
+    private List<ComponentStat> buildComponentStatsFromContents(
+        List<ObjAssessContentMapInfo> contentMaps,
+        Map<Long, Map<String, Double>> contentStudentRates
+    ) {
+        Map<Long, ContentAllocation> allocations = contentAllocations(contentMaps);
+        Map<String, List<Map.Entry<Long, ContentAllocation>>> byType = allocations.entrySet().stream()
+            .collect(Collectors.groupingBy(entry -> entry.getValue().contentType, LinkedHashMap::new, Collectors.toList()));
+
+        List<ComponentStat> result = new ArrayList<>();
+        for (Map.Entry<String, List<Map.Entry<Long, ContentAllocation>>> entry : byType.entrySet()) {
+            Set<String> students = new LinkedHashSet<>();
+            for (Map.Entry<Long, ContentAllocation> content : entry.getValue()) {
+                students.addAll(contentStudentRates.getOrDefault(content.getKey(), Map.of()).keySet());
+            }
+            double groupWeight = entry.getValue().stream().mapToDouble(item -> item.getValue().score).sum();
+            List<Double> scores = new ArrayList<>();
+            long passCount = 0;
+            for (String studentNo : students) {
+                double score = 0D;
+                for (Map.Entry<Long, ContentAllocation> content : entry.getValue()) {
+                    score += contentStudentRates.getOrDefault(content.getKey(), Map.of()).getOrDefault(studentNo, 0D)
+                        * content.getValue().score;
+                }
+                score = round2(score);
+                scores.add(score);
+                if (groupWeight <= 0D || score / groupWeight >= 0.6D) {
+                    passCount++;
+                }
+            }
+            double avg = scores.stream().mapToDouble(Double::doubleValue).average().orElse(0D);
+            double max = scores.stream().mapToDouble(Double::doubleValue).max().orElse(0D);
+            double min = scores.stream().mapToDouble(Double::doubleValue).min().orElse(0D);
+            result.add(new ComponentStat(
+                entry.getKey(),
+                assessContentTypeName(entry.getKey()),
+                round2(avg),
+                round2(max),
+                round2(min),
+                students.isEmpty() ? 0D : round4((double) passCount / students.size()),
+                round2(groupWeight)
             ));
         }
         return result;
@@ -510,6 +687,62 @@ public class ReportDataAssembler {
             .toList();
     }
 
+    private void buildObjectiveStudentDetailsFromContents(
+        ReportContext ctx,
+        Map<Long, Map<String, Double>> contentStudentRates,
+        Map<String, String> studentNames,
+        StudentReportData data
+    ) {
+        Map<Long, List<ObjAssessContentMapInfo>> mappingByObjective = ctx.objAssessContentMaps.stream()
+            .collect(Collectors.groupingBy(item -> item.objectiveId, LinkedHashMap::new, Collectors.toList()));
+        Map<String, StudentAchievementDetail> detailByStudent = new LinkedHashMap<>();
+        for (String studentNo : studentNames.keySet()) {
+            detailByStudent.put(studentNo, new StudentAchievementDetail(studentNo, studentNames.getOrDefault(studentNo, "")));
+        }
+
+        for (ObjectiveInfo objective : ctx.objectives) {
+            List<ObjAssessContentMapInfo> mappings = mappingByObjective.getOrDefault(objective.id, List.of());
+            double targetScore = mappings.stream().mapToDouble(item -> item.contributionScore).sum();
+            Set<String> objectiveStudents = new LinkedHashSet<>();
+            for (ObjAssessContentMapInfo mapping : mappings) {
+                objectiveStudents.addAll(contentStudentRates.getOrDefault(mapping.assessContentId, Map.of()).keySet());
+            }
+            if (objectiveStudents.isEmpty()) {
+                objectiveStudents.addAll(studentNames.keySet());
+            }
+
+            List<Double> objectiveScores = new ArrayList<>();
+            for (String studentNo : objectiveStudents) {
+                StudentAchievementDetail detail = detailByStudent.computeIfAbsent(studentNo,
+                    key -> new StudentAchievementDetail(key, studentNames.getOrDefault(key, "")));
+                double score = 0D;
+                for (ObjAssessContentMapInfo mapping : mappings) {
+                    score += contentStudentRates.getOrDefault(mapping.assessContentId, Map.of())
+                        .getOrDefault(studentNo, 0D) * mapping.contributionScore;
+                }
+                score = round2(score);
+                double achievement = targetScore > 0D ? round4(score / targetScore) : 0D;
+                detail.objectiveScores.put(objective.code, score);
+                detail.objectiveAchievements.put(objective.code, achievement);
+                objectiveScores.add(score);
+                if (achievement < ctx.thresholdValue) {
+                    data.weakStudents.add(new WeakStudent(
+                        studentNo,
+                        detail.studentName,
+                        objective.code,
+                        objective.content,
+                        achievement
+                    ));
+                }
+            }
+            data.objectiveScoreDistributions.put(objective.code, buildDistribution(objectiveScores));
+        }
+
+        data.studentDetails = detailByStudent.values().stream()
+            .sorted(Comparator.comparing(item -> item.studentNo))
+            .toList();
+    }
+
     private Map<String, Map<String, Double>> buildObjectiveBandAchievements(
         List<ObjectiveInfo> objectives,
         List<StudentAchievementDetail> studentDetails,
@@ -540,6 +773,47 @@ public class ReportDataAssembler {
             result.put(objective.code, bandAverages);
         }
         return result;
+    }
+
+    private Map<Long, Double> objectiveContentTargetScores(List<ObjAssessContentMapInfo> contentMaps) {
+        Map<Long, Double> result = new LinkedHashMap<>();
+        for (ObjAssessContentMapInfo mapping : contentMaps) {
+            result.merge(mapping.objectiveId, mapping.contributionScore, Double::sum);
+        }
+        result.replaceAll((key, value) -> round2(value));
+        return result;
+    }
+
+    private Map<Long, ContentAllocation> contentAllocations(List<ObjAssessContentMapInfo> contentMaps) {
+        Map<Long, ContentAllocation> result = new LinkedHashMap<>();
+        for (ObjAssessContentMapInfo mapping : contentMaps) {
+            ContentAllocation existing = result.get(mapping.assessContentId);
+            if (existing == null) {
+                result.put(mapping.assessContentId, new ContentAllocation(
+                    mapping.assessItemId,
+                    mapping.contentType,
+                    round2(mapping.contributionScore)
+                ));
+            } else {
+                result.put(mapping.assessContentId, new ContentAllocation(
+                    existing.assessItemId,
+                    existing.contentType,
+                    round2(existing.score + mapping.contributionScore)
+                ));
+            }
+        }
+        return result;
+    }
+
+    private Set<String> studentsFromContentRates(
+        Set<Long> contentIds,
+        Map<Long, Map<String, Double>> contentStudentRates
+    ) {
+        Set<String> students = new LinkedHashSet<>();
+        for (Long contentId : contentIds) {
+            students.addAll(contentStudentRates.getOrDefault(contentId, Map.of()).keySet());
+        }
+        return students;
     }
 
     private List<ObjAssessMapInfo> defaultMappings(List<AssessItemInfo> assessItems, Long objectiveId) {
@@ -738,6 +1012,23 @@ public class ReportDataAssembler {
         };
     }
 
+    private String normalizeAssessContentType(String type) {
+        String value = defaultString(type, "").trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "experiment", "practice", "lab", "实验", "實驗", "实践", "實踐", "项目", "項目" -> "experiment";
+            case "exam", "final", "test", "考核", "考试", "考試", "测验", "測驗", "综合", "綜合" -> "exam";
+            default -> "assignment";
+        };
+    }
+
+    private String assessContentTypeName(String type) {
+        return switch (normalizeAssessContentType(type)) {
+            case "experiment" -> "实验";
+            case "exam" -> "考核";
+            default -> "作业";
+        };
+    }
+
     private String judgement(double achievement, double thresholdValue) {
         if (achievement >= 0.9D) {
             return "优秀";
@@ -817,6 +1108,19 @@ public class ReportDataAssembler {
     private record GradeRow(long id, long assessItemId, String studentNo, double score, double maxScore) {
     }
 
+    private record ContentGradeRow(
+        long id,
+        long assessItemId,
+        long assessContentId,
+        String studentNo,
+        double score,
+        double maxScore
+    ) {
+    }
+
+    private record ContentAllocation(long assessItemId, String contentType, double score) {
+    }
+
     private record AchievementResultRow(
         long objectiveId,
         double normal,
@@ -854,6 +1158,7 @@ public class ReportDataAssembler {
         public List<ObjectiveInfo> objectives = new ArrayList<>();
         public List<AssessItemInfo> assessItems = new ArrayList<>();
         public List<ObjAssessMapInfo> objAssessMaps = new ArrayList<>();
+        public List<ObjAssessContentMapInfo> objAssessContentMaps = new ArrayList<>();
         public GradeDistribution gradeDistribution = new GradeDistribution();
         public List<ComponentStat> componentStats = new ArrayList<>();
         public List<ObjectiveAchievement> objectiveAchievements = new ArrayList<>();
@@ -989,6 +1294,28 @@ public class ReportDataAssembler {
             this.objectiveId = objectiveId;
             this.assessItemId = assessItemId;
             this.contributionWeight = contributionWeight;
+        }
+    }
+
+    public static class ObjAssessContentMapInfo {
+        public final Long objectiveId;
+        public final Long assessItemId;
+        public final Long assessContentId;
+        public final double contributionScore;
+        public final String contentType;
+
+        public ObjAssessContentMapInfo(
+            Long objectiveId,
+            Long assessItemId,
+            Long assessContentId,
+            double contributionScore,
+            String contentType
+        ) {
+            this.objectiveId = objectiveId;
+            this.assessItemId = assessItemId;
+            this.assessContentId = assessContentId;
+            this.contributionScore = contributionScore;
+            this.contentType = contentType;
         }
     }
 

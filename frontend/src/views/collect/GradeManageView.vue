@@ -2,7 +2,7 @@
   <div class="app-page page-stack">
     <ModuleHeader
       title="学生成绩管理"
-      description="按课程考核项维护考核内容及方式，分别导入作业、实验、试卷等成绩，并自动汇总为学生课程总成绩。"
+      description="大纲内已有信息只读确认，大纲外的考核内容、成绩导入和手动录入在这里完成。"
     />
 
     <div v-if="message.text" class="notice" :class="message.type">{{ message.text }}</div>
@@ -53,7 +53,90 @@
       </div>
     </PanelCard>
 
-    <PanelCard title="考核内容及方式表">
+    <PanelCard v-if="canUseCourse" title="开课配置总览" subtitle="系统展示已从教学大纲提取的信息，教师只补充考核内容、目标分值分配和成绩数据。">
+      <div class="workflow-steps">
+        <div v-for="step in workflowSteps" :key="step.key" class="workflow-step" :class="step.tone">
+          <span>{{ step.index }}</span>
+          <div>
+            <strong>{{ step.title }}</strong>
+            <small>{{ step.desc }}</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-overview-grid mt-16">
+        <section class="overview-card course-overview-card">
+          <div class="overview-card-head">
+            <span class="step-kicker">步骤0</span>
+            <strong>大纲已提取信息</strong>
+          </div>
+          <div class="course-name-line">{{ currentCourse?.name || selectedCourseText }}</div>
+          <div class="meta-grid compact-meta-grid">
+            <div>
+              <span>课程代码</span>
+              <strong>{{ currentCourse?.code || '--' }}</strong>
+            </div>
+            <div>
+              <span>学时</span>
+              <strong>{{ currentCourse?.hours ?? '--' }}</strong>
+            </div>
+            <div>
+              <span>学分</span>
+              <strong>{{ currentCourse?.credits ?? '--' }}</strong>
+            </div>
+            <div>
+              <span>开课单位</span>
+              <strong>{{ currentCourse?.collegeName || currentCourse?.department || '--' }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="overview-card objective-overview-card">
+          <div class="overview-card-head">
+            <span class="step-kicker">只读确认</span>
+            <strong>课程目标</strong>
+            <em>{{ formatNumber(objectiveWeightTotal) }}%</em>
+          </div>
+          <div v-if="!objectives.length" class="empty-inline">当前课程学期尚未维护课程目标。</div>
+          <div v-else class="objective-mini-list">
+            <div v-for="objective in objectives" :key="objective.id" class="objective-mini-row">
+              <div>
+                <strong>{{ objective.objCode }}</strong>
+                <small>{{ objective.objContent }}</small>
+              </div>
+              <span>{{ formatNumber(objective.weight) }}%</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="overview-card readiness-card">
+          <div class="overview-card-head">
+            <span class="step-kicker">配置状态</span>
+            <strong>当前进度</strong>
+          </div>
+          <div class="readiness-list">
+            <div>
+              <span>考核项权重</span>
+              <strong>{{ formatNumber(assessmentWeightTotal) }}%</strong>
+            </div>
+            <div>
+              <span>考核内容</span>
+              <strong>{{ configuredContentCount }} 项</strong>
+            </div>
+            <div>
+              <span>已导入表</span>
+              <strong>{{ importTables.length }} 个</strong>
+            </div>
+            <div>
+              <span>学生成绩</span>
+              <strong>{{ total }} 人</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+    </PanelCard>
+
+    <PanelCard title="步骤1：配置考核内容及方式" subtitle="按平时作业、实验项目、考核等小板块维护考核内容；每块右侧直接导入对应成绩。">
       <div v-if="!canUseCourse" class="notice info">请选择课程和学期。</div>
       <div v-else-if="loadingContents" class="notice info">正在加载考核内容...</div>
       <div v-else-if="!assessmentBlocks.length" class="notice warning">当前课程学期尚未配置考核项。</div>
@@ -107,7 +190,33 @@
       </div>
     </PanelCard>
 
-    <PanelCard v-if="batch" title="成绩导入复核">
+    <PanelCard v-if="canUseCourse" title="步骤2：课程目标分值分配" subtitle="按课程目标查看考核内容分配状态；具体分值矩阵在达成度核算页维护。">
+      <template #actions>
+        <router-link class="btn btn-secondary" to="/analysis/calculation">前往分值分配</router-link>
+      </template>
+      <div v-if="!objectives.length" class="notice info">暂无课程目标，完成大纲解析确认后可配置目标分值。</div>
+      <div v-else class="mapping-card-grid">
+        <section v-for="objective in objectives" :key="objective.id" class="mapping-card">
+          <header>
+            <div>
+              <h3>{{ objective.objCode }}</h3>
+              <p>{{ objective.objContent }}</p>
+            </div>
+            <span class="weight-pill" :class="{ warning: !isObjectiveAllocationOk(objective) }">
+              {{ formatNumber(objectiveAllocatedTotal(objective.id)) }} / {{ formatNumber(objective.weight) }}
+            </span>
+          </header>
+          <div v-if="objectiveMappedContents(objective.id).length" class="mapping-chip-list">
+            <span v-for="item in objectiveMappedContents(objective.id)" :key="`${objective.id}-${item.contentId}`">
+              {{ item.name }} · {{ formatNumber(item.score) }}
+            </span>
+          </div>
+          <div v-else class="empty-inline">尚未分配考核内容。</div>
+        </section>
+      </div>
+    </PanelCard>
+
+    <PanelCard v-if="batch" title="步骤3：成绩导入复核">
       <div class="info-strip">
         <div>文件：{{ batch.fileName || '—' }}</div>
         <div>状态：{{ batchStatusLabel(batch.status) }}</div>
@@ -193,6 +302,9 @@
           </button>
         </div>
         <span v-if="overwriteableDuplicateCount" class="duplicate-count">可覆盖 {{ overwriteableDuplicateCount }} 条重复成绩</span>
+        <button class="btn btn-danger" :disabled="discardingBatch" @click="discardPendingBatch(false)">
+          {{ discardingBatch ? '丢弃中...' : '丢弃本次导入' }}
+        </button>
         <button class="btn btn-primary" @click="confirmImport">
           {{ confirmImportMode === 'overwrite' ? '覆盖并确认导入' : '确认导入有效数据' }}
         </button>
@@ -267,7 +379,7 @@
       </div>
     </PanelCard>
 
-    <PanelCard title="学生成绩总表">
+    <PanelCard title="步骤4：学生成绩总表">
       <template #subtitle>
         <span v-if="canUseCourse">
           共 <strong>{{ total }}</strong> 名学生
@@ -458,8 +570,10 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   confirmGradeBatch,
+  discardGradeBatch,
   deleteImportedGradeRow,
   getAssessmentContents,
+  getAchievementContentMapping,
   getGradeBatchPreview,
   getImportedGrades,
   getReferenceCatalogs,
@@ -474,6 +588,9 @@ import PanelCard from '@/components/common/PanelCard.vue'
 const catalogs = reactive({ courses: [], semesters: [], classes: [] })
 const filter = reactive({ courseId: '', semester: '', classId: '', assessItemId: '', keyword: '' })
 const assessmentBlocks = ref([])
+const objectives = ref([])
+const contentMappingContents = ref([])
+const contentMappingRows = ref([])
 const summaryColumns = ref([])
 const componentColumns = ref([])
 const importTables = ref([])
@@ -487,6 +604,7 @@ const saving = ref(false)
 const savingContents = ref(false)
 const uploadingAssessItemId = ref(null)
 const savingRow = ref(null)
+const discardingBatch = ref(false)
 const draftRow = ref(null)
 const draftMode = ref('')
 const batch = ref(null)
@@ -513,6 +631,58 @@ const visibleAssessmentBlocks = computed(() => {
   if (!filter.assessItemId) return assessmentBlocks.value
   return assessmentBlocks.value.filter((item) => String(item.id) === String(filter.assessItemId))
 })
+const currentCourse = computed(() =>
+  catalogs.courses.find((item) => String(item.id) === String(filter.courseId)) || null
+)
+const objectiveWeightTotal = computed(() =>
+  objectives.value.reduce((sum, item) => sum + Number(item.weight || 0), 0)
+)
+const assessmentWeightTotal = computed(() =>
+  assessmentBlocks.value.reduce((sum, item) => sum + Number(item.weight || 0), 0)
+)
+const configuredContentCount = computed(() =>
+  assessmentBlocks.value.reduce((sum, item) => sum + (item.contents || []).length, 0)
+)
+const workflowSteps = computed(() => [
+  {
+    key: 'outline',
+    index: '0',
+    title: '大纲信息',
+    desc: objectives.value.length ? '已提取并展示' : '等待目标信息',
+    tone: objectives.value.length ? 'done' : 'pending'
+  },
+  {
+    key: 'contents',
+    index: '1',
+    title: '考核内容',
+    desc: configuredContentCount.value ? `${configuredContentCount.value} 项已配置` : '需要教师配置',
+    tone: configuredContentCount.value ? 'done' : 'current'
+  },
+  {
+    key: 'mapping',
+    index: '2',
+    title: '目标分值',
+    desc: mappedObjectiveCount.value ? `${mappedObjectiveCount.value} 个目标已分配` : '待分配',
+    tone: mappedObjectiveCount.value ? 'done' : 'pending'
+  },
+  {
+    key: 'import',
+    index: '3',
+    title: '成绩导入',
+    desc: importTables.value.length ? `${importTables.value.length} 个表已导入` : '待导入',
+    tone: importTables.value.length ? 'done' : 'pending'
+  },
+  {
+    key: 'summary',
+    index: '4',
+    title: '总表生成',
+    desc: total.value ? `${total.value} 名学生` : '等待成绩',
+    tone: total.value ? 'done' : 'pending'
+  }
+])
+const mappedObjectiveCount = computed(() =>
+  objectives.value.filter((item) => objectiveAllocatedTotal(item.id) > 0).length
+)
 const visibleContentDrafts = computed(() => {
   if (!contentDialog.assessItemId) return []
   return contentDrafts.value.filter((item) => String(item.assessItemId) === String(contentDialog.assessItemId))
@@ -540,12 +710,16 @@ watch(
   async ([course, semester]) => {
     filter.assessItemId = ''
     cancelDraft()
+    await discardPendingBatch(true, false)
     batch.value = null
     if (course && semester) {
-      await loadAssessmentContents()
+      await Promise.all([loadAssessmentContents(), loadObjectiveContext()])
       await loadGrades()
     } else {
       assessmentBlocks.value = []
+      objectives.value = []
+      contentMappingContents.value = []
+      contentMappingRows.value = []
       summaryColumns.value = []
       componentColumns.value = []
       importTables.value = []
@@ -593,6 +767,21 @@ async function loadAssessmentContents() {
   }
 }
 
+async function loadObjectiveContext() {
+  if (!canUseCourse.value) return
+  try {
+    const data = await getAchievementContentMapping({ courseId: filter.courseId, semester: filter.semester })
+    objectives.value = data.objectives || []
+    contentMappingContents.value = data.contents || []
+    contentMappingRows.value = data.rows || []
+  } catch (error) {
+    objectives.value = []
+    contentMappingContents.value = []
+    contentMappingRows.value = []
+    setMessage('warning', error.message || '课程目标分值分配状态读取失败。')
+  }
+}
+
 async function loadGrades() {
   if (!canUseCourse.value) return
   loading.value = true
@@ -633,6 +822,9 @@ function resetFilter() {
   cancelDraft()
   batch.value = null
   importTables.value = []
+  objectives.value = []
+  contentMappingContents.value = []
+  contentMappingRows.value = []
   confirmImportMode.value = 'valid_only'
   setMessage('', '')
 }
@@ -684,6 +876,42 @@ function stopPolling() {
   if (pollingTimer) {
     window.clearInterval(pollingTimer)
     pollingTimer = null
+  }
+}
+
+function isPendingBatchStatus(status) {
+  return status === 'PARSING' || status === 'PARSED'
+}
+
+async function discardPendingBatch(silent = false, reload = true) {
+  const currentBatch = batch.value
+  if (!currentBatch?.batchId || !isPendingBatchStatus(currentBatch.status)) {
+    return false
+  }
+  if (!silent && !window.confirm('确定丢弃本次待确认导入吗？解析出的缓冲成绩会被清除，正式成绩不会受影响。')) {
+    return false
+  }
+  stopPolling()
+  discardingBatch.value = true
+  try {
+    const result = await discardGradeBatch(currentBatch.batchId)
+    if (batch.value?.batchId === currentBatch.batchId) {
+      batch.value = null
+    }
+    if (!silent) {
+      setMessage('success', `已丢弃本次待确认导入，清理 ${result.discardedRows || 0} 条缓冲数据。`)
+    }
+    if (reload && canUseCourse.value) {
+      await loadGrades()
+    }
+    return true
+  } catch (error) {
+    if (!silent) {
+      setMessage('error', error.message || '待确认导入丢弃失败。')
+    }
+    return false
+  } finally {
+    discardingBatch.value = false
   }
 }
 
@@ -826,6 +1054,7 @@ async function saveContents() {
     } else {
       setMessage('success', '考核内容及方式表已保存。')
     }
+    await loadObjectiveContext()
     await loadGrades()
   } catch (error) {
     setContentDialogMessage('error', error.message || '考核内容保存失败。')
@@ -934,6 +1163,35 @@ function formatNumber(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, '')
 }
 
+function objectiveMappingRow(objectiveId) {
+  return contentMappingRows.value.find((row) => String(row.objectiveId) === String(objectiveId)) || null
+}
+
+function objectiveAllocatedTotal(objectiveId) {
+  const row = objectiveMappingRow(objectiveId)
+  if (!row?.values) return 0
+  return Object.values(row.values).reduce((sum, value) => sum + Number(value || 0), 0)
+}
+
+function objectiveMappedContents(objectiveId) {
+  const row = objectiveMappingRow(objectiveId)
+  if (!row?.values) return []
+  return Object.entries(row.values)
+    .map(([contentId, score]) => {
+      const content = contentMappingContents.value.find((item) => String(item.assessContentId) === String(contentId))
+      return {
+        contentId,
+        score: Number(score || 0),
+        name: content ? `${content.assessItemName}-${content.contentName}` : `考核内容${contentId}`
+      }
+    })
+    .filter((item) => item.score > 0)
+}
+
+function isObjectiveAllocationOk(objective) {
+  return Math.abs(objectiveAllocatedTotal(objective.id) - Number(objective.weight || 0)) <= 0.01
+}
+
 function hasScoreInput(value) {
   return value !== null && value !== undefined && String(value).trim() !== ''
 }
@@ -1027,6 +1285,7 @@ onMounted(loadCatalogs)
 onBeforeUnmount(() => {
   stopPolling()
   window.clearTimeout(keywordTimer)
+  void discardPendingBatch(true, false)
 })
 </script>
 
@@ -1041,6 +1300,227 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workflow-step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid #dfeaf0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.workflow-step > span {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  color: #fff;
+  background: #94a3b8;
+}
+
+.workflow-step strong,
+.workflow-step small {
+  display: block;
+}
+
+.workflow-step small {
+  margin-top: 4px;
+  color: var(--color-text-soft);
+  line-height: 1.4;
+}
+
+.workflow-step.done {
+  border-color: #bfe5d5;
+  background: #f5fbf8;
+}
+
+.workflow-step.done > span {
+  background: var(--color-primary);
+}
+
+.workflow-step.current {
+  border-color: #f0d49a;
+  background: #fffaf0;
+}
+
+.workflow-step.current > span {
+  background: var(--color-warning);
+}
+
+.config-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(340px, 1.1fr) minmax(240px, 0.75fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.overview-card,
+.mapping-card {
+  border: 1px solid #dfeaf0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px;
+}
+
+.overview-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.overview-card-head strong {
+  color: var(--color-primary-deep);
+}
+
+.overview-card-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-weight: 900;
+  color: var(--color-secondary);
+}
+
+.step-kicker {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--color-secondary-soft);
+  color: var(--color-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.course-name-line {
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+
+.meta-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.compact-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.meta-grid div,
+.readiness-list div {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f8fbfd;
+}
+
+.meta-grid span,
+.readiness-list span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--color-text-soft);
+  font-size: 12px;
+}
+
+.meta-grid strong,
+.readiness-list strong {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.objective-mini-list,
+.readiness-list,
+.mapping-chip-list {
+  display: grid;
+  gap: 8px;
+}
+
+.objective-mini-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid #edf3f6;
+}
+
+.objective-mini-row:last-child {
+  border-bottom: 0;
+}
+
+.objective-mini-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-soft);
+  line-height: 1.5;
+}
+
+.objective-mini-row > span {
+  font-weight: 900;
+  color: var(--color-primary);
+}
+
+.mapping-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.mapping-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mapping-card h3 {
+  margin: 0;
+  color: var(--color-primary-deep);
+  font-size: 16px;
+}
+
+.mapping-card p {
+  margin: 6px 0 0;
+  color: var(--color-text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mapping-chip-list {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin-top: 12px;
+}
+
+.mapping-chip-list span {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fbfd;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.empty-inline {
+  padding: 12px;
+  border: 1px dashed #d8e6ec;
+  border-radius: 8px;
+  color: var(--color-text-soft);
+  background: #fff;
 }
 
 .assessment-block-grid {
@@ -1537,11 +2017,28 @@ th.sticky-col {
   .form-grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .workflow-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .config-overview-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
   .form-grid-4,
   .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-meta-grid,
+  .mapping-card-grid {
     grid-template-columns: 1fr;
   }
 

@@ -54,7 +54,8 @@ const menuGroups = [
   {
     title: '结果分析与教学改进',
     items: [
-      { label: '达成度核算与报告', to: '/analysis/calculation' }
+      { label: '达成度核算', to: '/analysis/calculation' },
+      { label: '报告预览和导出', to: '/analysis/report' }
     ]
   }
 ]

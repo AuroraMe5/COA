@@ -18,7 +18,11 @@ export const collectModuleTabs = [
 
 export const analysisImproveTabs = [
   {
-    label: '达成度核算与报告',
+    label: '达成度核算',
     to: '/analysis/calculation'
+  },
+  {
+    label: '报告预览和导出',
+    to: '/analysis/report'
   }
 ]

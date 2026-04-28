@@ -29,6 +29,14 @@ public class AchievementService {
         return delegate.runAchievementCalculation(payload);
     }
 
+    public Map<String, Object> getAchievementContentMapping(Long courseId, String semester) {
+        return delegate.getAchievementContentMapping(courseId, semester);
+    }
+
+    public Map<String, Object> saveAchievementContentMapping(Map<String, Object> payload) {
+        return delegate.saveAchievementContentMapping(payload);
+    }
+
     @Transactional(readOnly = true)
     public Map<String, Object> getGradeDistribution(Long outlineId, Long semesterId) {
         List<Map<String, Object>> scores = getStudentTotalScores(outlineId, semesterId, null);

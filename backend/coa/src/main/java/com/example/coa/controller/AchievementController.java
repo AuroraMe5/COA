@@ -33,4 +33,17 @@ public class AchievementController {
     public Map<String, Object> runAchievementCalculation(@RequestBody Map<String, Object> payload) {
         return achievementService.runAchievementCalculation(payload);
     }
+
+    @GetMapping("/content-maps")
+    public Map<String, Object> getAchievementContentMapping(
+        @RequestParam(required = false) Long courseId,
+        @RequestParam(required = false) String semester
+    ) {
+        return achievementService.getAchievementContentMapping(courseId, semester);
+    }
+
+    @PostMapping("/content-maps")
+    public Map<String, Object> saveAchievementContentMapping(@RequestBody Map<String, Object> payload) {
+        return achievementService.saveAchievementContentMapping(payload);
+    }
 }

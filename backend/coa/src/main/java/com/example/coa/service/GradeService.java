@@ -32,6 +32,10 @@ public class GradeService {
         return delegate.confirmGradeBatch(batchId, payload);
     }
 
+    public Map<String, Object> discardGradeBatch(String batchId) {
+        return delegate.discardGradeBatch(batchId);
+    }
+
     public Map<String, Object> getImportedGrades(Map<String, String> filters) {
         return delegate.getImportedGrades(filters);
     }
