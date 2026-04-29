@@ -22,6 +22,15 @@
           </option>
         </select>
       </div>
+      <div class="filter-field">
+        <label>班级</label>
+        <select v-model="filters.classId" class="select-input" @change="loadPage">
+          <option value="">全部班级</option>
+          <option v-for="item in catalogs.classes" :key="item.id" :value="String(item.id)">
+            {{ item.className }}
+          </option>
+        </select>
+      </div>
     </div>
 
     <div v-if="message.text" class="notice" :class="message.type">{{ message.text }}</div>
@@ -31,7 +40,7 @@
     </div>
 
     <div class="grid-2">
-      <PanelCard title="核算规则配置" subtitle="支持设置核算方法、达成阈值和及格阈值。">
+      <PanelCard title="核算规则配置" subtitle="支持设置核算方法、达成阈值和良好阈值。">
         <div class="form-stack">
           <div class="form-field">
             <label>核算方法</label>
@@ -47,7 +56,7 @@
               <input v-model="record.config.thresholdValue" class="text-input" type="number" min="0.01" max="1" step="0.01" />
             </div>
             <div class="form-field">
-              <label>及格阈值</label>
+              <label>良好阈值</label>
               <input v-model="record.config.passThreshold" class="text-input" type="number" min="0.01" max="1" step="0.01" />
             </div>
           </div>
@@ -92,10 +101,10 @@
 
           <div class="notice info method-hint">
             <template v-if="record.config.calcMethod === 'weighted_avg'">
-              <strong>加权平均法：</strong>对每位学生计算分目标达成值（Σ得分率×考核权重），再取全班平均。≥0.6达成，≥0.7良好。
+              <strong>加权平均法：</strong>对每位学生计算分目标达成值（Σ得分率×考核权重），再取全班平均。默认≥0.6达成，≥0.7良好。
             </template>
             <template v-else-if="record.config.calcMethod === 'threshold'">
-              <strong>阈值法：</strong>对每位学生计算达成值，≥及格阈值视为达成。班级目标达成率 = 达成人数 / 总人数。
+              <strong>阈值法：</strong>对每位学生计算达成值，≥达成阈值视为达成。班级目标达成率 = 达成人数 / 总人数，默认≥0.7视为良好。
             </template>
             <template v-else-if="record.config.calcMethod === 'custom'">
               <strong>自定义规则：</strong>为每个分目标设置独立达成阈值，可启用补考折算处理。
@@ -401,15 +410,18 @@ import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatCard from '@/components/common/StatCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const catalogs = reactive({
   courses: [],
-  semesters: []
+  semesters: [],
+  classes: []
 })
 
 const filters = reactive({
   courseId: '',
-  semester: ''
+  semester: '',
+  classId: ''
 })
 
 const objectives = ref([])
@@ -418,8 +430,8 @@ const record = reactive({
   config: {
     calcRuleId: null,
     calcMethod: 'weighted_avg',
-    thresholdValue: 0.7,
-    passThreshold: 0.6,
+    thresholdValue: 0.6,
+    passThreshold: 0.7,
     retakeEnabled: false,
     customThresholds: {}
   },
@@ -554,13 +566,14 @@ const objectiveChartOption = computed(() => {
         symbol: 'none',
         lineStyle: { color: '#b7791f', type: 'dashed' },
         label: { formatter: '阈值' },
-        data: [{ yAxis: rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.7) }]
+        data: [{ yAxis: rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.6) }]
       }
     }]
   }
 })
 
 const assessRateChartOption = computed(() => {
+  const goodThreshold = rateToPercent(record.smartAnalysis?.goodThreshold || record.config.passThreshold || 0.7)
   const data = (record.chartData?.assessRates?.length ? record.chartData.assessRates : record.dataSummary.assessItems)
     .map((item) => ({
       name: item.name || item.itemName,
@@ -594,14 +607,14 @@ const assessRateChartOption = computed(() => {
       barMaxWidth: 22,
       data: data.map((item) => ({
         value: item.value,
-        itemStyle: { color: item.value >= 70 ? '#2b6cb0' : '#c2410c' }
+        itemStyle: { color: item.value >= goodThreshold ? '#2b6cb0' : '#c2410c' }
       }))
     }]
   }
 })
 
 const componentChartOption = computed(() => {
-  const threshold = rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.7)
+  const threshold = rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.6)
   const data = (record.chartData?.objectiveBars?.length ? record.chartData.objectiveBars : record.results)
     .map((item) => {
       const value = rateToPercent(item.value ?? item.achieveValue)
@@ -675,7 +688,7 @@ const componentChartOption = computed(() => {
 })
 
 const coverageChartOption = computed(() => {
-  const threshold = rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.7)
+  const threshold = rateToPercent(record.smartAnalysis?.thresholdValue || record.config.thresholdValue || 0.6)
   const data = (record.dataSummary.assessItems || []).map((item) => ({
     name: item.itemName,
     typeName: item.itemTypeName,
@@ -766,7 +779,8 @@ function defaultSmartAnalysis() {
   return {
     summary: '',
     riskLevel: 'info',
-    thresholdValue: 0.7,
+    thresholdValue: 0.6,
+    goodThreshold: 0.7,
     achievedCount: 0,
     objectiveCount: 0,
     highlights: [],
@@ -823,15 +837,16 @@ function pieStatusBorderColor(item, threshold) {
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function applyRecord(payload = {}) {
   if (payload.config) {
     record.config.calcRuleId = payload.config.calcRuleId || null
     record.config.calcMethod = payload.config.calcMethod || 'weighted_avg'
-    record.config.thresholdValue = payload.config.thresholdValue || 0.7
-    record.config.passThreshold = payload.config.passThreshold || 0.6
+    record.config.thresholdValue = payload.config.thresholdValue || 0.6
+    record.config.passThreshold = payload.config.passThreshold || 0.7
     record.config.retakeEnabled = Boolean(payload.config.retakeEnabled)
     record.config.customThresholds = payload.config.customThresholds || {}
   }
@@ -964,8 +979,10 @@ async function loadPage() {
     const data = await getAchievementCalculation(filters)
     catalogs.courses = data.courses
     catalogs.semesters = data.semesters
+    catalogs.classes = data.classes || []
     filters.courseId = data.currentCourseId
     filters.semester = data.currentSemester
+    filters.classId = data.currentClassId ? String(data.currentClassId) : (filters.classId || '')
     currentOutlineId.value = data.outlineId
     objectives.value = data.objectives || []
     applyRecord(data.record)
@@ -981,6 +998,7 @@ async function runCalculation() {
     const payload = {
       courseId: filters.courseId,
       semester: filters.semester,
+      classId: filters.classId || undefined,
       calcMethod: record.config.calcMethod,
       thresholdValue: record.config.thresholdValue,
       passThreshold: record.config.passThreshold,

@@ -80,6 +80,7 @@ import { getObjectiveMapping, saveObjectiveMapping } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const props = defineProps({
   embedded: {
@@ -116,7 +117,8 @@ const message = reactive({
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function objectiveLabel(id) {

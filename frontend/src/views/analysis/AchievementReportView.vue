@@ -109,6 +109,7 @@ import { downloadReport, getAchievementCalculation, getReportPreviewMeta } from 
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatCard from '@/components/common/StatCard.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const catalogs = reactive({
   courses: [],
@@ -141,7 +142,8 @@ const hasCalcResult = computed(() => Boolean(currentOutlineId.value && record.co
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function applyRecord(payload = {}) {

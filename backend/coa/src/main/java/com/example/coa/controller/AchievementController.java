@@ -24,9 +24,10 @@ public class AchievementController {
     @GetMapping("/results")
     public Map<String, Object> getAchievementResults(
         @RequestParam(required = false) Long courseId,
-        @RequestParam(required = false) String semester
+        @RequestParam(required = false) String semester,
+        @RequestParam(required = false) Long classId
     ) {
-        return achievementService.getAchievementResults(courseId, semester);
+        return achievementService.getAchievementResults(courseId, semester, classId);
     }
 
     @PostMapping("/tasks")

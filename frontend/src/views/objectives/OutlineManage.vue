@@ -344,10 +344,6 @@
               <span>权重合计</span>
               <strong>{{ formatNumber(assessWeightTotal) }}</strong>
             </div>
-            <div>
-              <span>满分</span>
-              <strong>{{ formatNumber(assessMaxScoreTotal) }}</strong>
-            </div>
           </div>
 
           <PanelCard title="考核项维护">
@@ -533,6 +529,7 @@ import PanelCard from '@/components/common/PanelCard.vue'
 import ObjectiveList from '@/views/objectives/ObjectiveList.vue'
 import ObjectiveMapping from '@/views/objectives/ObjectiveMapping.vue'
 import ObjectiveWeights from '@/views/objectives/ObjectiveWeights.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const route = useRoute()
 const router = useRouter()
@@ -628,9 +625,6 @@ const hasMoreTeachingContents = computed(() =>
 const assessWeightTotal = computed(() =>
   assessItemDrafts.value.reduce((sum, item) => sum + Number(item.weight || 0), 0)
 )
-const assessMaxScoreTotal = computed(() =>
-  assessItemDrafts.value.reduce((sum, item) => sum + Number(item.maxScore || 0), 0)
-)
 const teacherText = computed(() => detail.teacherNames.length ? detail.teacherNames.join('、') : '未配置')
 const objectiveMap = computed(() => new Map(detail.objectives.map((item) => [Number(item.id), item])))
 const selectedCourseText = computed(() => {
@@ -701,17 +695,14 @@ function changePreviewTeachingPage(page) {
 function setMessage(type, text) {
   clearMessageTimer()
   message.type = type
-  message.text = text
-  if (text) {
-    messageTimer = window.setTimeout(() => {
-      clearMessage()
-    }, 3000)
-  }
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function clearMessage() {
   clearMessageTimer()
   message.text = ''
+  showFeedback('', '')
 }
 
 function clearMessageTimer() {
@@ -1200,7 +1191,7 @@ onBeforeUnmount(clearMessageTimer)
 
 .assess-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 

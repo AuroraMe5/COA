@@ -636,8 +636,8 @@ CREATE TABLE `calc_rule` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '核算规则ID',
   `rule_name` VARCHAR(50) NOT NULL COMMENT '规则名称',
   `calc_method` VARCHAR(20) NOT NULL COMMENT 'weighted_avg/threshold',
-  `threshold_value` DECIMAL(5,4) NOT NULL DEFAULT 0.7000 COMMENT '达成阈值',
-  `pass_threshold` DECIMAL(5,4) NOT NULL DEFAULT 0.6000 COMMENT '及格阈值',
+  `threshold_value` DECIMAL(5,4) NOT NULL DEFAULT 0.6000 COMMENT '达成阈值',
+  `pass_threshold` DECIMAL(5,4) NOT NULL DEFAULT 0.7000 COMMENT '良好阈值',
   `config_json` JSON DEFAULT NULL COMMENT '扩展配置',
   `is_default` TINYINT NOT NULL DEFAULT 0 COMMENT '1默认 0非默认',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
@@ -650,6 +650,7 @@ CREATE TABLE `achieve_result` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '达成度结果ID',
   `result_batch_no` VARCHAR(40) NOT NULL COMMENT '同一次核算批次号',
   `course_id` BIGINT NOT NULL COMMENT '课程ID',
+  `class_id` BIGINT DEFAULT NULL COMMENT '班级ID，NULL表示全班级汇总',
   `objective_id` BIGINT DEFAULT NULL COMMENT '目标ID，NULL表示课程整体',
   `calc_rule_id` BIGINT NOT NULL COMMENT '核算规则ID',
   `semester_id` BIGINT NOT NULL COMMENT '学期ID',
@@ -664,8 +665,10 @@ CREATE TABLE `achieve_result` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   KEY `idx_achieve_result_scope` (`course_id`, `semester_id`, `objective_id`),
+  KEY `idx_achieve_result_class` (`class_id`, `semester_id`),
   KEY `idx_achieve_result_batch` (`result_batch_no`),
   CONSTRAINT `fk_achieve_result_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
+  CONSTRAINT `fk_achieve_result_class` FOREIGN KEY (`class_id`) REFERENCES `base_class` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_achieve_result_objective` FOREIGN KEY (`objective_id`) REFERENCES `teach_objective` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_achieve_result_rule` FOREIGN KEY (`calc_rule_id`) REFERENCES `calc_rule` (`id`),
   CONSTRAINT `fk_achieve_result_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
@@ -835,7 +838,7 @@ INSERT INTO `class_course` (`id`, `class_id`, `course_id`, `semester_id`, `teach
   (4103, 4002, 2004, 1, 1203, 1);
 
 INSERT INTO `calc_rule` (`id`, `rule_name`, `calc_method`, `threshold_value`, `pass_threshold`, `config_json`, `is_default`, `status`) VALUES
-  (1, '默认加权平均核算规则', 'weighted_avg', 0.7000, 0.6000, JSON_OBJECT('description', '按考核项贡献权重汇总教学目标达成度'), 1, 1);
+  (1, '默认加权平均核算规则', 'weighted_avg', 0.6000, 0.7000, JSON_OBJECT('description', '按考核项贡献权重汇总教学目标达成度'), 1, 1);
 
 INSERT INTO `suggestion_rule` (`id`, `rule_code`, `rule_name`, `rule_type`, `trigger_condition_json`, `suggestion_template`, `priority`, `is_enabled`, `sort_order`, `description`) VALUES
   (1, 'R01', '目标未达成', 'OBJECTIVE', JSON_OBJECT('metric', 'objective_achieve_value', 'operator', 'lt', 'valueSource', 'calc_rule.threshold_value'), '目标达成度低于阈值，建议针对薄弱知识点增加课堂练习与课后巩固。', 1, 1, 1, '目标达成度低于阈值时触发'),
@@ -844,8 +847,9 @@ INSERT INTO `suggestion_rule` (`id`, `rule_code`, `rule_name`, `rule_type`, `tri
   (4, 'R07', '教学效果良好', 'POSITIVE', JSON_OBJECT('metric', 'overall_achievement', 'operator', 'gte', 'value', 0.85), '课程整体达成良好，建议总结优秀做法并在同类课程中推广。', 3, 1, 4, '课程整体达成度较高时触发');
 
 INSERT INTO `improve_suggestion` (`id`, `achieve_range_min`, `achieve_range_max`, `suggestion_content`, `category`, `priority`, `status`) VALUES
-  (1, 0.0000, 0.6999, '建议围绕未达成目标增加专题讲练、案例讲解和分层作业。', '目标改进', 1, 1),
-  (2, 0.7000, 0.8499, '建议保持当前教学策略，并针对边缘目标进行小范围优化。', '持续优化', 2, 1),
-  (3, 0.8500, 1.0000, '建议总结优秀教学经验并进行课程组共享。', '经验推广', 3, 1);
+  (1, 0.0000, 0.5999, '建议围绕未达成目标增加专题讲练、案例讲解和分层作业。', '目标改进', 1, 1),
+  (2, 0.6000, 0.6999, '目标已达到基本达成标准，建议针对边缘目标进行小范围优化。', '达成巩固', 2, 1),
+  (3, 0.7000, 0.8499, '目标达成情况良好，建议保持当前教学策略并持续跟踪。', '持续优化', 3, 1),
+  (4, 0.8500, 1.0000, '建议总结优秀教学经验并进行课程组共享。', '经验推广', 4, 1);
 
 SET FOREIGN_KEY_CHECKS = 1;

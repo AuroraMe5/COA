@@ -21,8 +21,8 @@ public class AchievementService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public Map<String, Object> getAchievementResults(Long courseId, String semester) {
-        return delegate.getAchievementCalculation(courseId, semester);
+    public Map<String, Object> getAchievementResults(Long courseId, String semester, Long classId) {
+        return delegate.getAchievementCalculation(courseId, semester, classId);
     }
 
     public Map<String, Object> runAchievementCalculation(Map<String, Object> payload) {

@@ -65,6 +65,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { showFeedback } from '@/utils/feedback'
 
 const router = useRouter()
 const route = useRoute()
@@ -91,7 +92,8 @@ async function handleLogin() {
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     router.push(redirect)
   } catch (error) {
-    errorMessage.value = error.message || '登录失败，请检查账号信息。'
+    errorMessage.value = ''
+    showFeedback('error', error.message || '登录失败，请检查账号信息。')
   } finally {
     submitting.value = false
   }

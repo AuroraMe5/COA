@@ -39,6 +39,10 @@ const routes = [
         meta: { title: '教师工作台' }
       },
       {
+        path: 'objectives',
+        redirect: '/objectives/outlines'
+      },
+      {
         path: 'objectives/outlines',
         name: 'outlines',
         component: OutlineManage,
@@ -76,6 +80,10 @@ const routes = [
         meta: { title: '目标考核映射' }
       },
       {
+        path: 'collect',
+        redirect: '/collect/classes'
+      },
+      {
         path: 'collect/classes',
         name: 'class-collect',
         component: ClassCollectView,
@@ -91,6 +99,10 @@ const routes = [
         name: 'grade-manage',
         component: GradeManageView,
         meta: { title: '学生成绩管理' }
+      },
+      {
+        path: 'analysis',
+        redirect: '/analysis/calculation'
       },
       {
         path: 'analysis/calculation',

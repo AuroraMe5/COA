@@ -40,6 +40,8 @@ public class ReportDataAssembler {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final double DEFAULT_ACHIEVEMENT_THRESHOLD = 0.6D;
+    private static final double DEFAULT_GOOD_THRESHOLD = 0.7D;
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final JdbcTemplate plainJdbcTemplate;
@@ -101,6 +103,7 @@ public class ReportDataAssembler {
         ctx.outlineId = outlineId;
         ctx.calcRuleId = effectiveCalcRuleId;
         ctx.thresholdValue = ruleInfo.thresholdValue;
+        ctx.goodThreshold = ruleInfo.passThreshold;
         ctx.generatedAt = LocalDateTime.now().format(TIME_FORMATTER);
         ctx.courseInfo = new CourseInfo(
             courseId,
@@ -137,6 +140,7 @@ public class ReportDataAssembler {
             ctx.objectives,
             resultRows,
             ruleInfo.thresholdValue,
+            ruleInfo.passThreshold,
             objectiveContentTargetScores(ctx.objAssessContentMaps)
         );
         ctx.overallAchievement = loadOverallAchievement(courseId, semesterId, effectiveCalcRuleId);
@@ -274,6 +278,7 @@ public class ReportDataAssembler {
         List<ObjectiveInfo> objectives,
         Map<Long, AchievementResultRow> resultRows,
         double thresholdValue,
+        double goodThreshold,
         Map<Long, Double> objectiveTargetScores
     ) {
         List<ObjectiveAchievement> result = new ArrayList<>();
@@ -291,7 +296,7 @@ public class ReportDataAssembler {
                 round2(totalScore * achievement),
                 round4(achievement),
                 row != null && row.achieved,
-                judgement(achievement, thresholdValue),
+                judgement(achievement, thresholdValue, goodThreshold),
                 row == null ? 0D : row.normal,
                 row == null ? 0D : row.mid,
                 row == null ? 0D : row.fin
@@ -568,7 +573,7 @@ public class ReportDataAssembler {
                 }
                 score = round2(score);
                 scores.add(score);
-                if (groupWeight <= 0D || score / groupWeight >= 0.6D) {
+                if (groupWeight <= 0D || score / groupWeight >= DEFAULT_ACHIEVEMENT_THRESHOLD) {
                     passCount++;
                 }
             }
@@ -613,7 +618,7 @@ public class ReportDataAssembler {
                 }
                 score = round2(score);
                 scores.add(score);
-                if (groupWeight <= 0D || score / groupWeight >= 0.6D) {
+                if (groupWeight <= 0D || score / groupWeight >= DEFAULT_ACHIEVEMENT_THRESHOLD) {
                     passCount++;
                 }
             }
@@ -925,7 +930,7 @@ public class ReportDataAssembler {
 
     private CalcRuleInfo loadCalcRule(Long calcRuleId) {
         if (calcRuleId == null) {
-            return new CalcRuleInfo(null, "weighted_avg", 0.7D, 0.6D, false);
+            return new CalcRuleInfo(null, "weighted_avg", DEFAULT_ACHIEVEMENT_THRESHOLD, DEFAULT_GOOD_THRESHOLD, false);
         }
         return jdbcTemplate.query("""
             SELECT id, calc_method, threshold_value, pass_threshold, config_json
@@ -933,7 +938,7 @@ public class ReportDataAssembler {
             WHERE id = :id
             """, params("id", calcRuleId), rs -> {
             if (!rs.next()) {
-                return new CalcRuleInfo(calcRuleId, "weighted_avg", 0.7D, 0.6D, false);
+                return new CalcRuleInfo(calcRuleId, "weighted_avg", DEFAULT_ACHIEVEMENT_THRESHOLD, DEFAULT_GOOD_THRESHOLD, false);
             }
             Map<String, Object> config = readMap(rs.getString("config_json"));
             return new CalcRuleInfo(
@@ -1029,15 +1034,16 @@ public class ReportDataAssembler {
         };
     }
 
-    private String judgement(double achievement, double thresholdValue) {
+    private String judgement(double achievement, double thresholdValue, double goodThreshold) {
         if (achievement >= 0.9D) {
             return "优秀";
         }
-        if (achievement >= 0.7D) {
+        double effectiveGoodThreshold = goodThreshold > 0D ? goodThreshold : DEFAULT_GOOD_THRESHOLD;
+        if (achievement >= effectiveGoodThreshold) {
             return "良好";
         }
-        if (achievement >= Math.min(0.6D, thresholdValue)) {
-            return "及格";
+        if (achievement >= Math.min(DEFAULT_ACHIEVEMENT_THRESHOLD, thresholdValue)) {
+            return "达成";
         }
         return "未达标";
     }
@@ -1171,7 +1177,8 @@ public class ReportDataAssembler {
         public List<StudentScoreSummary> studentScoreSummaries = new ArrayList<>();
         public List<String> existingSuggestions = new ArrayList<>();
         public int studentCount;
-        public double thresholdValue = 0.7D;
+        public double thresholdValue = DEFAULT_ACHIEVEMENT_THRESHOLD;
+        public double goodThreshold = DEFAULT_GOOD_THRESHOLD;
         public String generatedAt = "";
     }
 

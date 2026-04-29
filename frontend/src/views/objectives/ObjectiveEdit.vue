@@ -112,6 +112,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getObjectiveDetail, getReferenceCatalogs, saveObjective } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const route = useRoute()
 const router = useRouter()
@@ -156,7 +157,8 @@ function buildDecompose() {
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function syncCourseMeta() {

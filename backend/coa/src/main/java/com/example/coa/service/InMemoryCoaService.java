@@ -68,6 +68,8 @@ public class InMemoryCoaService {
     private static final TypeReference<List<Map<String, Object>>> MAP_LIST_TYPE = new TypeReference<>() {};
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
     private static final HttpStatus UNPROCESSABLE_STATUS = HttpStatus.UNPROCESSABLE_CONTENT;
+    private static final double DEFAULT_ACHIEVEMENT_THRESHOLD = 0.6D;
+    private static final double DEFAULT_GOOD_THRESHOLD = 0.7D;
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final JdbcTemplate plainJdbcTemplate;
@@ -86,6 +88,7 @@ public class InMemoryCoaService {
         this.objectMapper = objectMapper;
         this.outlineParseEngine = outlineParseEngine;
         ensureParseImportSchema();
+        normalizeDefaultCalcRuleThresholds();
     }
 
     public AuthenticatedUser authenticate(String username, String password) {
@@ -223,7 +226,7 @@ public class InMemoryCoaService {
                 c.course_name,
                 COALESCE(MAX(CASE WHEN ar.objective_id IS NULL THEN ar.achieve_value END), 0) AS value
             FROM base_course c
-            LEFT JOIN achieve_result ar ON ar.course_id = c.id AND ar.status = 1
+            LEFT JOIN achieve_result ar ON ar.course_id = c.id AND ar.status = 1 AND ar.class_id IS NULL
             GROUP BY c.id, c.course_name
             ORDER BY c.id
             """, (rs, rowNum) -> map(
@@ -253,9 +256,9 @@ public class InMemoryCoaService {
         }
 
         List<Map<String, Object>> quickLinks = List.of(
-            map("label", "教学目标管理", "route", "/objectives/list"),
-            map("label", "数据采集", "route", "/collect/grades/manage"),
-            map("label", "达成度核算", "route", "/analysis/calculation")
+            map("label", "课程管理", "route", "/objectives/outlines"),
+            map("label", "数据采集", "route", "/collect"),
+            map("label", "达成度核算", "route", "/analysis")
         );
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -1031,16 +1034,18 @@ public class InMemoryCoaService {
                 bc.class_name,
                 bc.major_id,
                 bm.major_name,
+                c.college_name,
                 bc.grade_year,
                 bc.student_count,
                 bc.status
             FROM base_class bc
             LEFT JOIN base_major bm ON bm.id = bc.major_id
+            LEFT JOIN base_college c ON c.id = bm.college_id
             WHERE bc.status = 1
             """);
         MapSqlParameterSource params = new MapSqlParameterSource();
         if (StringUtils.hasText(text)) {
-            sql.append(" AND (bc.class_code LIKE :keyword OR bc.class_name LIKE :keyword OR bm.major_name LIKE :keyword)");
+            sql.append(" AND (bc.class_code LIKE :keyword OR bc.class_name LIKE :keyword OR bm.major_name LIKE :keyword OR c.college_name LIKE :keyword)");
             params.addValue("keyword", "%" + text.trim() + "%");
         }
         sql.append(" ORDER BY bc.grade_year DESC, bc.class_code ASC, bc.id ASC");
@@ -3356,10 +3361,15 @@ public class InMemoryCoaService {
     }
 
     public Map<String, Object> getAchievementCalculation(Long courseId, String semester) {
+        return getAchievementCalculation(courseId, semester, null);
+    }
+
+    public Map<String, Object> getAchievementCalculation(Long courseId, String semester, Long classId) {
         long currentCourseId = normalizeCourseId(courseId);
         String currentSemester = normalizeSemester(semester);
         Long semesterId = findSemesterId(currentSemester);
         Long outlineId = findOutlineId(currentCourseId, currentSemester);
+        Long currentClassId = classId == null || classId <= 0 ? null : classId;
 
         Map<String, Object> config = currentCalcRule();
         Map<String, Object> configJson = readMap(config.get("config_json"));
@@ -3368,11 +3378,12 @@ public class InMemoryCoaService {
             ? (Map<String, Object>) configJson.get("customThresholds") : Map.of();
         boolean retakeEnabled = Boolean.TRUE.equals(configJson.get("retakeEnabled"));
 
-        List<Map<String, Object>> results = achievementResults(currentCourseId, semesterId, false);
-        Map<String, Object> overall = achievementOverall(currentCourseId, semesterId);
-        Map<String, Object> dataSummary = buildAchievementDataSummary(currentCourseId, semesterId, outlineId);
+        List<Map<String, Object>> results = achievementResults(currentCourseId, semesterId, currentClassId, false);
+        Map<String, Object> overall = achievementOverall(currentCourseId, semesterId, currentClassId);
+        Map<String, Object> dataSummary = buildAchievementDataSummary(currentCourseId, semesterId, outlineId, currentClassId);
         double overallAchievement = doubleValue(overall.get("achieve_value"));
         double thresholdValue = doubleValue(config.get("threshold_value"));
+        double goodThreshold = doubleValue(config.get("pass_threshold"));
 
         List<Map<String, Object>> objectives = outlineId != null ? jdbcTemplate.query("""
             SELECT id, obj_code
@@ -3387,6 +3398,7 @@ public class InMemoryCoaService {
         Map<String, Object> result = referenceData();
         result.put("currentCourseId", currentCourseId);
         result.put("currentSemester", currentSemester);
+        result.put("currentClassId", currentClassId);
         result.put("outlineId", outlineId);
         result.put("objectives", objectives);
         result.put("record", map(
@@ -3402,7 +3414,7 @@ public class InMemoryCoaService {
             "overallAchievement", overallAchievement,
             "results", results,
             "dataSummary", dataSummary,
-            "smartAnalysis", buildAchievementSmartAnalysis(results, dataSummary, overallAchievement, thresholdValue),
+            "smartAnalysis", buildAchievementSmartAnalysis(results, dataSummary, overallAchievement, thresholdValue, goodThreshold),
             "chartData", buildAchievementChartData(results, dataSummary)
         ));
         return result;
@@ -3413,6 +3425,10 @@ public class InMemoryCoaService {
         String semesterCode = defaultString(payload.get("semester"), normalizeSemester(null));
         long semesterId = requireSemesterId(semesterCode);
         long outlineId = ensureOutline(courseId, semesterCode);
+        Long classId = nullableLong(payload.get("classId"));
+        if (classId != null && classId <= 0) {
+            classId = null;
+        }
         if (listSize(payload.get("contentMappingRows")) > 0) {
             Map<String, Object> mappingPayload = new LinkedHashMap<>();
             mappingPayload.put("courseId", courseId);
@@ -3422,8 +3438,8 @@ public class InMemoryCoaService {
             saveAchievementContentMapping(mappingPayload);
         }
 
-        double thresholdValue = doubleValue(payload.getOrDefault("thresholdValue", 0.7D));
-        double passThreshold = doubleValue(payload.getOrDefault("passThreshold", 0.6D));
+        double thresholdValue = doubleValue(payload.getOrDefault("thresholdValue", DEFAULT_ACHIEVEMENT_THRESHOLD));
+        double passThreshold = doubleValue(payload.getOrDefault("passThreshold", DEFAULT_GOOD_THRESHOLD));
         String calcMethod = defaultString(payload.get("calcMethod"), "weighted_avg");
         boolean retakeEnabled = Boolean.TRUE.equals(payload.get("retakeEnabled"));
         @SuppressWarnings("unchecked")
@@ -3438,13 +3454,15 @@ public class InMemoryCoaService {
             SET status = 0, updated_at = NOW()
             WHERE course_id = :courseId
               AND semester_id = :semesterId
+              AND ((:classId IS NULL AND class_id IS NULL) OR (:classId IS NOT NULL AND class_id = :classId))
               AND status = 1
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
-            .addValue("semesterId", semesterId));
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId));
 
         List<Map<String, Object>> objectives = objectiveList(outlineId);
-        Map<Long, Map<String, Double>> itemStudentRates = perStudentItemRates(outlineId, semesterId, retakeEnabled);
+        Map<Long, Map<String, Double>> itemStudentRates = perStudentItemRates(outlineId, semesterId, classId, retakeEnabled);
         Map<Long, Double> itemAvgRates = computeAvgRates(itemStudentRates);
         List<Map<String, Object>> contentMappings = contentMappingWeights(outlineId);
         Map<Long, List<Map<String, Object>>> contentMappingsByObjective = contentMappings.stream()
@@ -3455,7 +3473,7 @@ public class InMemoryCoaService {
             ));
         Map<Long, Map<String, Double>> contentStudentRates = contentMappings.isEmpty()
             ? Map.of()
-            : perStudentContentRates(outlineId, semesterId, retakeEnabled);
+            : perStudentContentRates(outlineId, semesterId, classId, retakeEnabled);
         boolean useContentMappings = !contentMappings.isEmpty();
         double overallAchievement = 0D;
 
@@ -3483,7 +3501,7 @@ public class InMemoryCoaService {
                     studentValues.put(entry.getKey(), objectiveMaxScore > 0D ? round4(entry.getValue() / objectiveMaxScore) : 0D);
                 }
                 if ("threshold".equals(calcMethod)) {
-                    long passCount = studentValues.values().stream().filter(v -> v >= passThreshold).count();
+                    long passCount = studentValues.values().stream().filter(v -> v >= thresholdValue).count();
                     long total = studentValues.size();
                     achieveValue = total > 0 ? round4((double) passCount / total) : 0D;
                     achieved = achieveValue >= thresholdValue;
@@ -3518,7 +3536,7 @@ public class InMemoryCoaService {
                 }
             } else if ("threshold".equals(calcMethod)) {
                 Map<String, Double> studentValues = computeStudentObjectiveValues(mappings, itemStudentRates);
-                long passCount = studentValues.values().stream().filter(v -> v >= passThreshold).count();
+                long passCount = studentValues.values().stream().filter(v -> v >= thresholdValue).count();
                 long total = studentValues.size();
                 achieveValue = total > 0 ? round4((double) passCount / total) : 0D;
                 achieved = achieveValue >= thresholdValue;
@@ -3553,15 +3571,16 @@ public class InMemoryCoaService {
             GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
             jdbcTemplate.update("""
                 INSERT INTO achieve_result (
-                    result_batch_no, course_id, objective_id, calc_rule_id, semester_id,
+                    result_batch_no, course_id, class_id, objective_id, calc_rule_id, semester_id,
                     normal_score, mid_score, final_score, achieve_value, is_achieved, status
                 ) VALUES (
-                    :batchNo, :courseId, :objectiveId, :calcRuleId, :semesterId,
+                    :batchNo, :courseId, :classId, :objectiveId, :calcRuleId, :semesterId,
                     :normalScore, :midScore, :finalScore, :achieveValue, :isAchieved, 1
                 )
                 """, new MapSqlParameterSource()
                 .addValue("batchNo", batchNo)
                 .addValue("courseId", courseId)
+                .addValue("classId", classId)
                 .addValue("objectiveId", objectiveId)
                 .addValue("calcRuleId", calcRuleId)
                 .addValue("semesterId", semesterId)
@@ -3612,22 +3631,25 @@ public class InMemoryCoaService {
         overallAchievement = round4(overallAchievement);
         jdbcTemplate.update("""
             INSERT INTO achieve_result (
-                result_batch_no, course_id, objective_id, calc_rule_id, semester_id,
+                result_batch_no, course_id, class_id, objective_id, calc_rule_id, semester_id,
                 achieve_value, is_achieved, status
             ) VALUES (
-                :batchNo, :courseId, NULL, :calcRuleId, :semesterId,
+                :batchNo, :courseId, :classId, NULL, :calcRuleId, :semesterId,
                 :achieveValue, :isAchieved, 1
             )
             """, new MapSqlParameterSource()
             .addValue("batchNo", batchNo)
             .addValue("courseId", courseId)
+            .addValue("classId", classId)
             .addValue("calcRuleId", calcRuleId)
             .addValue("semesterId", semesterId)
             .addValue("achieveValue", overallAchievement)
             .addValue("isAchieved", overallAchievement >= thresholdValue ? 1 : 0));
 
-        generateSuggestions(courseId, semesterId, thresholdValue);
-        return getAchievementCalculation(courseId, semesterCode);
+        if (classId == null) {
+            generateSuggestions(courseId, semesterId, thresholdValue);
+        }
+        return getAchievementCalculation(courseId, semesterCode, classId);
     }
 
     public Map<String, Object> getCourseOverview(Long courseId, String semester) {
@@ -3644,7 +3666,7 @@ public class InMemoryCoaService {
                 c.course_name,
                 COALESCE(MAX(CASE WHEN ar.objective_id IS NULL AND bs.semester_code = ? THEN ar.achieve_value END), 0) AS value
             FROM base_course c
-            LEFT JOIN achieve_result ar ON ar.course_id = c.id AND ar.status = 1
+            LEFT JOIN achieve_result ar ON ar.course_id = c.id AND ar.status = 1 AND ar.class_id IS NULL
             LEFT JOIN base_semester bs ON bs.id = ar.semester_id
             GROUP BY c.id, c.course_name
             ORDER BY c.id
@@ -3690,6 +3712,7 @@ public class InMemoryCoaService {
             JOIN base_semester bs ON bs.id = ar.semester_id
             WHERE ar.course_id = :courseId
               AND ar.status = 1
+              AND ar.class_id IS NULL
               AND ((:objectiveId IS NULL AND ar.objective_id IS NULL) OR ar.objective_id = :objectiveId)
             ORDER BY bs.school_year ASC, bs.term_no ASC
             """;
@@ -4192,11 +4215,13 @@ public class InMemoryCoaService {
                 bc.class_name,
                 bc.major_id,
                 bm.major_name,
+                c.college_name,
                 bc.grade_year,
                 bc.student_count,
                 bc.status
             FROM base_class bc
             LEFT JOIN base_major bm ON bm.id = bc.major_id
+            LEFT JOIN base_college c ON c.id = bm.college_id
             WHERE bc.status = 1
             ORDER BY bc.grade_year DESC, bc.class_code ASC, bc.id ASC
             """, (rs, rowNum) -> classMap(rs));
@@ -4759,9 +4784,32 @@ public class InMemoryCoaService {
         ensureColumn("intelligent_suggestion", "suggestion_source", "VARCHAR(30) DEFAULT 'RULE'");
         ensureColumnDefinition("teach_objective", "relation_level", "VARCHAR(4) NOT NULL DEFAULT 'H'", "varchar(4)", "NO", "H", "'H'");
         ensureColumnDefinition("intelligent_suggestion", "suggestion_source", "VARCHAR(30) NOT NULL DEFAULT 'RULE'", "varchar(30)", "NO", "RULE", "'RULE'");
+        ensureColumnDefinition("calc_rule", "threshold_value", "DECIMAL(5,4) NOT NULL DEFAULT 0.6000 COMMENT '达成阈值'", "decimal(5,4)", "NO", "0.6000", "0.6000");
+        ensureColumnDefinition("calc_rule", "pass_threshold", "DECIMAL(5,4) NOT NULL DEFAULT 0.7000 COMMENT '良好阈值'", "decimal(5,4)", "NO", "0.7000", "0.7000");
         ensureCourseTeachingContentTable();
         ensureCollectSchema();
         migrateParsedTeachingContentsToTable();
+    }
+
+    private void normalizeDefaultCalcRuleThresholds() {
+        try {
+            int updated = plainJdbcTemplate.update("""
+                UPDATE calc_rule
+                SET threshold_value = ?,
+                    pass_threshold = ?,
+                    updated_at = NOW()
+                WHERE is_default = 1
+                  AND ABS(threshold_value - ?) < 0.0001
+                  AND ABS(pass_threshold - ?) < 0.0001
+                """, DEFAULT_ACHIEVEMENT_THRESHOLD, DEFAULT_GOOD_THRESHOLD,
+                DEFAULT_GOOD_THRESHOLD, DEFAULT_ACHIEVEMENT_THRESHOLD);
+            if (updated > 0) {
+                log.info("Schema migration: normalized default calc_rule thresholds to achievement={} good={}",
+                    DEFAULT_ACHIEVEMENT_THRESHOLD, DEFAULT_GOOD_THRESHOLD);
+            }
+        } catch (Exception error) {
+            log.warn("Schema migration failed for calc_rule thresholds: {}", error.getMessage());
+        }
     }
 
     private void ensureCollectSchema() {
@@ -4831,6 +4879,7 @@ public class InMemoryCoaService {
             ensureColumn("student_grade", "assess_content_id", "BIGINT NULL");
             ensureColumn("student_grade", "raw_score", "DECIMAL(6,2) NULL");
             ensureColumn("student_grade", "raw_max_score", "DECIMAL(6,2) NOT NULL DEFAULT 100.00");
+            ensureColumn("achieve_result", "class_id", "BIGINT NULL");
             backfillRawScores();
             ensureAssessmentContentTable();
             ensureGradeImportPreviewTable();
@@ -4840,11 +4889,13 @@ public class InMemoryCoaService {
             ensureIndex("student_grade", "idx_student_grade_class", List.of("class_id", "semester_id"));
             ensureIndex("student_grade", "idx_student_grade_content", List.of("assess_content_id"));
             ensureIndex("student_grade", "fk_student_grade_student", List.of("student_id"));
+            ensureIndex("achieve_result", "idx_achieve_result_class", List.of("class_id", "semester_id"));
             ensureForeignKey("grade_import_batch", "fk_grade_import_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
             ensureForeignKey("grade_import_batch", "fk_grade_import_content", "assess_content_id", "assess_content", "id", "ON DELETE SET NULL");
             ensureForeignKey("student_grade", "fk_student_grade_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
             ensureForeignKey("student_grade", "fk_student_grade_student", "student_id", "base_student", "id", "ON DELETE SET NULL");
             ensureForeignKey("student_grade", "fk_student_grade_content", "assess_content_id", "assess_content", "id", "ON DELETE SET NULL");
+            ensureForeignKey("achieve_result", "fk_achieve_result_class", "class_id", "base_class", "id", "ON DELETE SET NULL");
         } catch (Exception e) {
             log.warn("Schema migration failed for collect tables: {}", e.getMessage());
         }
@@ -6464,6 +6515,7 @@ public class InMemoryCoaService {
             "className", rs.getString("class_name"),
             "majorId", nullableLong(rs.getObject("major_id")),
             "majorName", defaultString(rs.getString("major_name"), ""),
+            "collegeName", defaultString(rs.getString("college_name"), ""),
             "gradeYear", defaultString(rs.getString("grade_year"), ""),
             "studentCount", rs.getInt("student_count"),
             "status", rs.getInt("status")
@@ -7924,13 +7976,14 @@ public class InMemoryCoaService {
         return keyHolder.getKey().longValue();
     }
 
-    private Map<Long, Map<String, Double>> perStudentItemRates(long outlineId, long semesterId, boolean retakeEnabled) {
+    private Map<Long, Map<String, Double>> perStudentItemRates(long outlineId, long semesterId, Long classId, boolean retakeEnabled) {
         List<Map<String, Object>> rows = jdbcTemplate.query("""
             SELECT sg.assess_item_id, sg.student_no, sg.score, sg.max_score
             FROM student_grade sg
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND (:classId IS NULL OR sg.class_id = :classId)
               AND gb.status = 'CONFIRMED'
               AND sg.assess_item_id IN (
                   SELECT id FROM assess_item WHERE outline_id = :outlineId
@@ -7938,7 +7991,8 @@ public class InMemoryCoaService {
             ORDER BY sg.assess_item_id ASC, sg.student_no ASC, sg.id ASC
             """, new MapSqlParameterSource()
             .addValue("outlineId", outlineId)
-            .addValue("semesterId", semesterId), (rs, rowNum) -> map(
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId), (rs, rowNum) -> map(
             "assessItemId", rs.getLong("assess_item_id"),
             "studentNo", rs.getString("student_no"),
             "score", rs.getDouble("score"),
@@ -8010,13 +8064,14 @@ public class InMemoryCoaService {
         return studentValues;
     }
 
-    private Map<Long, Map<String, Double>> perStudentContentRates(long outlineId, long semesterId, boolean retakeEnabled) {
+    private Map<Long, Map<String, Double>> perStudentContentRates(long outlineId, long semesterId, Long classId, boolean retakeEnabled) {
         List<Map<String, Object>> rows = jdbcTemplate.query("""
             SELECT sg.assess_content_id, sg.student_no, sg.score, sg.max_score
             FROM student_grade sg
             JOIN grade_import_batch gb ON gb.id = sg.import_batch_id
             WHERE sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND (:classId IS NULL OR sg.class_id = :classId)
               AND sg.assess_content_id IS NOT NULL
               AND gb.status = 'CONFIRMED'
               AND sg.assess_item_id IN (
@@ -8025,7 +8080,8 @@ public class InMemoryCoaService {
             ORDER BY sg.assess_content_id ASC, sg.student_no ASC, sg.id ASC
             """, new MapSqlParameterSource()
             .addValue("outlineId", outlineId)
-            .addValue("semesterId", semesterId), (rs, rowNum) -> map(
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId), (rs, rowNum) -> map(
             "assessContentId", rs.getLong("assess_content_id"),
             "studentNo", rs.getString("student_no"),
             "score", rs.getDouble("score"),
@@ -8191,6 +8247,10 @@ public class InMemoryCoaService {
     }
 
     private Map<String, Object> buildAchievementDataSummary(long courseId, Long semesterId, Long outlineId) {
+        return buildAchievementDataSummary(courseId, semesterId, outlineId, null);
+    }
+
+    private Map<String, Object> buildAchievementDataSummary(long courseId, Long semesterId, Long outlineId, Long classId) {
         if (semesterId == null || outlineId == null) {
             return map(
                 "objectiveCount", 0,
@@ -8205,7 +8265,7 @@ public class InMemoryCoaService {
         }
 
         List<Map<String, Object>> objectives = objectiveList(outlineId);
-        List<Map<String, Object>> assessItems = achievementAssessItemSummary(outlineId, courseId, semesterId);
+        List<Map<String, Object>> assessItems = achievementAssessItemSummary(outlineId, courseId, semesterId, classId);
         long mappingCount = count("""
             SELECT COUNT(*)
             FROM obj_assess_map m
@@ -8226,20 +8286,24 @@ public class InMemoryCoaService {
             WHERE sg.course_id = :courseId
               AND sg.semester_id = :semesterId
               AND sg.valid_flag = 1
+              AND (:classId IS NULL OR sg.class_id = :classId)
               AND gb.status = 'CONFIRMED'
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
-            .addValue("semesterId", semesterId));
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId));
         long pendingRows = count("""
             SELECT COUNT(*)
             FROM grade_import_preview gp
             JOIN grade_import_batch gb ON gb.id = gp.import_batch_id
             WHERE gp.course_id = :courseId
               AND gp.semester_id = :semesterId
+              AND (:classId IS NULL OR gp.class_id = :classId)
               AND gb.status <> 'CONFIRMED'
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
-            .addValue("semesterId", semesterId));
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId));
 
         List<String> warnings = new ArrayList<>();
         if (objectives.isEmpty()) {
@@ -8274,9 +8338,11 @@ public class InMemoryCoaService {
         List<Map<String, Object>> results,
         Map<String, Object> dataSummary,
         double overallAchievement,
-        double thresholdValue
+        double thresholdValue,
+        double goodThreshold
     ) {
-        double threshold = thresholdValue > 0D ? thresholdValue : 0.7D;
+        double threshold = thresholdValue > 0D ? thresholdValue : DEFAULT_ACHIEVEMENT_THRESHOLD;
+        double good = goodThreshold > 0D ? goodThreshold : DEFAULT_GOOD_THRESHOLD;
         int totalObjectives = results.size();
         long achievedCount = results.stream().filter(item -> booleanValue(item.get("isAchieved"))).count();
         List<Map<String, Object>> assessItems = listOfMap(dataSummary.get("assessItems"));
@@ -8294,13 +8360,13 @@ public class InMemoryCoaService {
                     "objContent", trimText(defaultString(item.get("objContent"), ""), 80),
                     "achieveValue", round4(value),
                     "gap", round4(Math.max(0D, threshold - value)),
-                    "level", achievementLevel(value)
+                    "level", achievementLevel(value, threshold, good)
                 );
             })
             .toList();
 
         List<Map<String, Object>> weakAssessItems = assessItems.stream()
-            .filter(item -> longValue(item.get("confirmedRows")) == 0L || doubleValue(item.get("avgRate")) < 0.7D)
+            .filter(item -> longValue(item.get("confirmedRows")) == 0L || doubleValue(item.get("avgRate")) < good)
             .sorted(Comparator
                 .comparingLong((Map<String, Object> item) -> longValue(item.get("confirmedRows")) == 0L ? 0L : 1L)
                 .thenComparingDouble(item -> doubleValue(item.get("avgRate"))))
@@ -8382,6 +8448,7 @@ public class InMemoryCoaService {
             "summary", summary,
             "riskLevel", riskLevel,
             "thresholdValue", threshold,
+            "goodThreshold", good,
             "achievedCount", achievedCount,
             "objectiveCount", totalObjectives,
             "highlights", highlights,
@@ -8417,18 +8484,15 @@ public class InMemoryCoaService {
         );
     }
 
-    private String achievementLevel(double value) {
+    private String achievementLevel(double value, double threshold, double goodThreshold) {
         if (value >= 0.9D) {
             return "优秀";
         }
-        if (value >= 0.8D) {
+        if (value >= goodThreshold) {
             return "良好";
         }
-        if (value >= 0.7D) {
-            return "中等";
-        }
-        if (value >= 0.6D) {
-            return "基本达成";
+        if (value >= threshold) {
+            return "达成";
         }
         return "未达成";
     }
@@ -8441,7 +8505,7 @@ public class InMemoryCoaService {
         return normalized.substring(0, Math.max(0, maxLength)) + "…";
     }
 
-    private List<Map<String, Object>> achievementAssessItemSummary(long outlineId, long courseId, long semesterId) {
+    private List<Map<String, Object>> achievementAssessItemSummary(long outlineId, long courseId, long semesterId, Long classId) {
         return jdbcTemplate.query("""
             SELECT
                 ai.id,
@@ -8462,6 +8526,7 @@ public class InMemoryCoaService {
                 WHERE sg.course_id = :courseId
                   AND sg.semester_id = :semesterId
                   AND sg.valid_flag = 1
+                  AND (:classId IS NULL OR sg.class_id = :classId)
                   AND gb.status = 'CONFIRMED'
                 GROUP BY sg.assess_item_id
             ) c ON c.assess_item_id = ai.id
@@ -8473,6 +8538,7 @@ public class InMemoryCoaService {
                 JOIN grade_import_batch gb ON gb.id = gp.import_batch_id
                 WHERE gp.course_id = :courseId
                   AND gp.semester_id = :semesterId
+                  AND (:classId IS NULL OR gp.class_id = :classId)
                   AND gb.status <> 'CONFIRMED'
                 GROUP BY gp.assess_item_id
             ) p ON p.assess_item_id = ai.id
@@ -8481,7 +8547,8 @@ public class InMemoryCoaService {
             """, new MapSqlParameterSource()
             .addValue("outlineId", outlineId)
             .addValue("courseId", courseId)
-            .addValue("semesterId", semesterId), (rs, rowNum) -> map(
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId), (rs, rowNum) -> map(
             "assessItemId", rs.getLong("id"),
             "itemName", rs.getString("item_name"),
             "itemType", defaultString(rs.getString("item_type"), ""),
@@ -8511,6 +8578,10 @@ public class InMemoryCoaService {
     }
 
     private List<Map<String, Object>> achievementResults(long courseId, Long semesterId, boolean keepNumbers) {
+        return achievementResults(courseId, semesterId, null, keepNumbers);
+    }
+
+    private List<Map<String, Object>> achievementResults(long courseId, Long semesterId, Long classId, boolean keepNumbers) {
         if (semesterId == null) {
             return List.of();
         }
@@ -8529,12 +8600,14 @@ public class InMemoryCoaService {
             JOIN teach_objective t ON t.id = ar.objective_id
             WHERE ar.course_id = :courseId
               AND ar.semester_id = :semesterId
+              AND ((:classId IS NULL AND ar.class_id IS NULL) OR (:classId IS NOT NULL AND ar.class_id = :classId))
               AND ar.status = 1
               AND ar.objective_id IS NOT NULL
             ORDER BY t.sort_order ASC, t.id ASC
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
-            .addValue("semesterId", semesterId), (rs, rowNum) -> {
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId), (rs, rowNum) -> {
             long objectiveId = rs.getLong("objective_id");
             return map(
                 "objectiveId", objectiveId,
@@ -8546,12 +8619,16 @@ public class InMemoryCoaService {
                 "final", keepNumbers ? round4(rs.getDouble("final_score")) : rs.getBigDecimal("final_score"),
                 "achieveValue", keepNumbers ? round4(rs.getDouble("achieve_value")) : rs.getBigDecimal("achieve_value"),
                 "isAchieved", rs.getInt("is_achieved") == 1,
-                "details", achievementResultDetails(courseId, semesterId, objectiveId)
+                "details", achievementResultDetails(courseId, semesterId, classId, objectiveId)
             );
         });
     }
 
     private List<Map<String, Object>> achievementResultDetails(long courseId, long semesterId, long objectiveId) {
+        return achievementResultDetails(courseId, semesterId, null, objectiveId);
+    }
+
+    private List<Map<String, Object>> achievementResultDetails(long courseId, long semesterId, Long classId, long objectiveId) {
         return jdbcTemplate.query("""
             SELECT
                 ai.id,
@@ -8566,12 +8643,14 @@ public class InMemoryCoaService {
             JOIN assess_item ai ON ai.id = d.assess_item_id
             WHERE ar.course_id = :courseId
               AND ar.semester_id = :semesterId
+              AND ((:classId IS NULL AND ar.class_id IS NULL) OR (:classId IS NOT NULL AND ar.class_id = :classId))
               AND ar.objective_id = :objectiveId
               AND ar.status = 1
             ORDER BY ai.sort_order ASC, ai.id ASC
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
             .addValue("semesterId", semesterId)
+            .addValue("classId", classId)
             .addValue("objectiveId", objectiveId), (rs, rowNum) -> map(
             "assessItemId", rs.getLong("id"),
             "itemName", rs.getString("item_name"),
@@ -8585,6 +8664,10 @@ public class InMemoryCoaService {
     }
 
     private Map<String, Object> achievementOverall(long courseId, Long semesterId) {
+        return achievementOverall(courseId, semesterId, null);
+    }
+
+    private Map<String, Object> achievementOverall(long courseId, Long semesterId, Long classId) {
         if (semesterId == null) {
             return map("achieve_value", 0D, "calc_time", "");
         }
@@ -8593,13 +8676,15 @@ public class InMemoryCoaService {
             FROM achieve_result
             WHERE course_id = :courseId
               AND semester_id = :semesterId
+              AND ((:classId IS NULL AND class_id IS NULL) OR (:classId IS NOT NULL AND class_id = :classId))
               AND objective_id IS NULL
               AND status = 1
             ORDER BY calc_time DESC, id DESC
             LIMIT 1
             """, new MapSqlParameterSource()
             .addValue("courseId", courseId)
-            .addValue("semesterId", semesterId), rs -> rs.next() ? map(
+            .addValue("semesterId", semesterId)
+            .addValue("classId", classId), rs -> rs.next() ? map(
             "achieve_value", rs.getBigDecimal("achieve_value"),
             "calc_time", formatTime(rs.getTimestamp("calc_time"))
         ) : map("achieve_value", 0D, "calc_time", ""));

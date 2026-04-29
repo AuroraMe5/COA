@@ -31,11 +31,11 @@
             <input v-model.trim="classForm.className" class="text-input" placeholder="如：计算机2023级1班" />
           </div>
           <div class="form-field">
-            <label>专业</label>
+            <label>学院</label>
             <select v-model="classForm.majorId" class="select-input">
               <option value="">未设置</option>
               <option v-for="major in catalogs.majors" :key="major.id" :value="major.id">
-                {{ major.name }}
+                {{ major.collegeName || major.name }}
               </option>
             </select>
           </div>
@@ -56,7 +56,7 @@
             <thead>
               <tr>
                 <th>班级</th>
-                <th>专业</th>
+                <th>学院</th>
                 <th>年级</th>
                 <th>学生</th>
                 <th>操作</th>
@@ -68,7 +68,7 @@
                   <strong>{{ item.className }}</strong>
                   <div class="cell-note">{{ item.classCode }}</div>
                 </td>
-                <td>{{ item.majorName || '—' }}</td>
+                <td>{{ item.collegeName || item.majorName || '—' }}</td>
                 <td>{{ item.gradeYear || '—' }}</td>
                 <td>{{ item.studentCount || 0 }}</td>
                 <td class="nowrap">
@@ -246,6 +246,7 @@ import {
 } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
+import { confirmFeedback, showFeedback } from '@/utils/feedback'
 
 const catalogs = reactive({ courses: [], semesters: [], majors: [] })
 const classes = ref([])
@@ -276,7 +277,8 @@ function blankClass() {
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function resetClassForm() {
@@ -376,7 +378,10 @@ async function submitStudent() {
 }
 
 async function removeStudent(item) {
-  if (!window.confirm(`确定删除 ${item.studentName}（${item.studentNo}）吗？`)) return
+  const confirmed = await confirmFeedback(`确定删除 ${item.studentName}（${item.studentNo}）吗？`, {
+    confirmText: '删除'
+  })
+  if (!confirmed) return
   try {
     await deleteStudent(item.id)
     setMessage('success', '学生已删除。')
@@ -408,7 +413,10 @@ async function submitClassCourse() {
 }
 
 async function removeClassCourse(item) {
-  if (!window.confirm(`确定移除 ${item.className} 的 ${item.courseName} 吗？`)) return
+  const confirmed = await confirmFeedback(`确定移除 ${item.className} 的 ${item.courseName} 吗？`, {
+    confirmText: '移除'
+  })
+  if (!confirmed) return
   try {
     await deleteClassCourse(item.id)
     setMessage('success', '班级课程已移除。')

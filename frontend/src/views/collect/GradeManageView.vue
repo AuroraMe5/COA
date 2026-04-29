@@ -5,7 +5,7 @@
       description="大纲内已有信息只读确认，大纲外的考核内容、成绩导入和手动录入在这里完成。"
     />
 
-    <div v-if="message.text" class="notice" :class="message.type">{{ message.text }}</div>
+    <div v-if="message.text && message.type !== 'success-dialog'" class="notice" :class="message.type">{{ message.text }}</div>
 
     <PanelCard title="查询条件">
       <div class="form-grid-4">
@@ -222,6 +222,14 @@
         <div>状态：{{ batchStatusLabel(batch.status) }}</div>
         <div>有效行：{{ batch.validRows || 0 }}</div>
         <div>异常行：{{ batch.errorRows || 0 }}</div>
+      </div>
+
+      <div v-if="invalidPreviewRows.length" class="notice warning import-warning mt-16">
+        <strong>有 {{ invalidPreviewRows.length }} 行存在缺失或异常成绩，确认导入时只会写入有效成绩。</strong>
+        <div class="import-warning-list">
+          <span v-for="(line, index) in visibleInvalidPreviewLines" :key="`${index}-${line}`">{{ line }}</span>
+          <span v-if="invalidPreviewOverflow">还有 {{ invalidPreviewOverflow }} 行，请在预览表中继续查看。</span>
+        </div>
       </div>
 
       <div v-if="batch.status === 'PARSED'" class="table-shell grade-preview-shell mt-16">
@@ -484,6 +492,24 @@
       </div>
     </PanelCard>
 
+    <div v-if="message.text && message.type === 'success-dialog'" class="modal-backdrop" @click.self="closeFeedbackDialog">
+      <section class="modal-panel feedback-panel" role="dialog" aria-modal="true" aria-label="成绩导入提醒">
+        <header class="modal-head">
+          <div>
+            <h2>成绩导入成功</h2>
+            <p>已更新下方“已导入成绩明细”和“学生成绩总表”。</p>
+          </div>
+          <button class="btn btn-light btn-mini" @click="closeFeedbackDialog">关闭</button>
+        </header>
+        <div class="modal-body feedback-body">
+          <div class="notice success">导入已完成，请核对下方成绩明细。</div>
+          <div v-if="feedbackLines.length" class="feedback-lines">
+            <p v-for="(line, index) in feedbackLines" :key="`${index}-${line}`">{{ line }}</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div v-if="contentDialog.open" class="modal-backdrop" @click.self="closeContentDialog">
       <section class="modal-panel content-modal-panel" role="dialog" aria-modal="true" aria-label="考核内容及方式表">
         <header class="modal-head">
@@ -584,6 +610,7 @@ import {
 } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
+import { confirmFeedback, showFeedback } from '@/utils/feedback'
 
 const catalogs = reactive({ courses: [], semesters: [], classes: [] })
 const filter = reactive({ courseId: '', semester: '', classId: '', assessItemId: '', keyword: '' })
@@ -696,6 +723,18 @@ const overwriteableDuplicateCount = computed(() =>
     count + (row.cells || []).filter((cell) => isOverwriteableDuplicate(cell.errorMsg)).length
   ), 0)
 )
+const invalidPreviewRows = computed(() =>
+  (batch.value?.previewRows || []).filter((row) => !row.valid)
+)
+const visibleInvalidPreviewLines = computed(() =>
+  invalidPreviewRows.value.map(formatInvalidPreviewRow).slice(0, 6)
+)
+const invalidPreviewOverflow = computed(() =>
+  Math.max(0, invalidPreviewRows.value.length - visibleInvalidPreviewLines.value.length)
+)
+const feedbackLines = computed(() =>
+  String(message.text || '').split('\n').map((line) => line.trim()).filter(Boolean)
+)
 const selectedCourseText = computed(() => {
   const course = catalogs.courses.find((item) => String(item.id) === String(filter.courseId))
   return course ? `${course.name}（${course.code}）` : '当前课程'
@@ -747,7 +786,27 @@ watch(
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
+}
+
+function closeFeedbackDialog() {
+  setMessage('', '')
+}
+
+function formatInvalidPreviewRow(row) {
+  const student = `${row.studentName || '未命名'}（${row.studentNo || '未填学号'}）`
+  const errors = (row.cells || [])
+    .filter((cell) => !cell.valid)
+    .map((cell) => `${cell.assessItemName || '成绩'}：${cell.errorMsg || '无效'}`)
+  return `${student}：${errors.join('；') || row.errorMsg || '存在异常成绩'}`
+}
+
+function unresolvedInvalidPreviewRows() {
+  return invalidPreviewRows.value.filter((row) => {
+    if (confirmImportMode.value !== 'overwrite') return true
+    return (row.cells || []).some((cell) => !cell.valid && !isOverwriteableDuplicate(cell.errorMsg))
+  })
 }
 
 async function loadAssessmentContents() {
@@ -799,7 +858,6 @@ async function loadGrades() {
     importTables.value = data.importTables || []
     rows.value = data.rows || []
     total.value = data.total || rows.value.length
-    if (!message.text || message.type !== 'warning') setMessage('', '')
   } catch (error) {
     summaryColumns.value = []
     componentColumns.value = []
@@ -888,7 +946,10 @@ async function discardPendingBatch(silent = false, reload = true) {
   if (!currentBatch?.batchId || !isPendingBatchStatus(currentBatch.status)) {
     return false
   }
-  if (!silent && !window.confirm('确定丢弃本次待确认导入吗？解析出的缓冲成绩会被清除，正式成绩不会受影响。')) {
+  const confirmed = silent || await confirmFeedback('确定丢弃本次待确认导入吗？解析出的缓冲成绩会被清除，正式成绩不会受影响。', {
+    confirmText: '丢弃'
+  })
+  if (!confirmed) {
     return false
   }
   stopPolling()
@@ -949,12 +1010,18 @@ async function savePreviewRow(row) {
 
 async function confirmImport() {
   try {
+    const unresolvedRows = unresolvedInvalidPreviewRows()
     const result = await confirmGradeBatch(batch.value.batchId, { importMode: confirmImportMode.value })
     batch.value.status = 'CONFIRMED'
     const overwritten = Number(result.overwrittenCount || 0)
     const overwriteText = overwritten > 0 ? `，覆盖 ${overwritten} 条已有成绩` : ''
-    setMessage('success', `导入完成：已写入 ${result.importedCount} 条有效原始成绩${overwriteText}，跳过 ${result.skippedCount} 条异常数据。`)
     await loadGrades()
+    const skipped = Number(result.skippedCount || 0)
+    const detailLines = unresolvedRows.map(formatInvalidPreviewRow)
+    const attentionText = detailLines.length
+      ? `\n需关注：以下学生存在缺失或异常成绩，本次未写入对应成绩。\n${detailLines.slice(0, 8).join('\n')}${detailLines.length > 8 ? `\n另有 ${detailLines.length - 8} 行请回到原文件核对。` : ''}`
+      : ''
+    setMessage('success-dialog', `已写入 ${result.importedCount} 条有效原始成绩${overwriteText}，跳过 ${skipped} 条异常数据。${attentionText}`)
   } catch (error) {
     setMessage('error', error.message || '成绩导入失败。')
   }
@@ -985,7 +1052,8 @@ function closeContentDialog() {
 
 function setContentDialogMessage(type, text) {
   contentDialogMessage.type = type
-  contentDialogMessage.text = text
+  contentDialogMessage.text = ''
+  showFeedback(type, text)
 }
 
 function emptyContentRow() {
@@ -1134,7 +1202,9 @@ async function saveDraftRow() {
 }
 
 async function deleteRow(row) {
-  const confirmed = window.confirm(`确定删除 ${row.studentName}（${row.studentNo}）的本次查询范围内成绩吗？`)
+  const confirmed = await confirmFeedback(`确定删除 ${row.studentName}（${row.studentNo}）的本次查询范围内成绩吗？`, {
+    confirmText: '删除'
+  })
   if (!confirmed) return
   try {
     await deleteImportedGradeRow({
@@ -1671,6 +1741,42 @@ onBeforeUnmount(() => {
   color: var(--color-warning);
   font-size: 13px;
   font-weight: 700;
+}
+
+.import-warning {
+  display: grid;
+  gap: 10px;
+}
+
+.import-warning-list {
+  display: grid;
+  gap: 6px;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.feedback-panel {
+  width: min(620px, 94vw);
+}
+
+.feedback-body {
+  display: grid;
+  gap: 12px;
+}
+
+.feedback-lines {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.feedback-lines p {
+  margin: 0;
+  line-height: 1.6;
 }
 
 .import-detail-shell {

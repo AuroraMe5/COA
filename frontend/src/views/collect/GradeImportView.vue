@@ -130,6 +130,7 @@ import {
 } from '@/api'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const catalogs = reactive({ courses: [], semesters: [], assessItems: [], classes: [] })
 const classCourses = ref([])
@@ -160,7 +161,8 @@ const filteredAssessItems = computed(() =>
 
 function setMessage(type, text) {
   message.type = type
-  message.text = text
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function handleFileChange(event) {

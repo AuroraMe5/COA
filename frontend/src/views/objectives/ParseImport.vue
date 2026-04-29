@@ -208,7 +208,7 @@
           </div>
         </div>
         <div v-if="parsedTeachingContents.length" class="table-shell">
-          <table class="data-table compact-table editable-table">
+          <table class="data-table compact-table editable-table teaching-content-table">
             <thead>
               <tr>
                 <th>课程内容</th>
@@ -286,7 +286,7 @@
           </div>
         </div>
         <div v-if="parsedAssessmentDetails.length" class="table-shell">
-          <table class="data-table compact-table editable-table">
+          <table class="data-table compact-table editable-table assessment-detail-table">
             <thead>
               <tr>
                 <th>考核方式</th>
@@ -663,6 +663,7 @@ import {
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import { showFeedback } from '@/utils/feedback'
 
 const router = useRouter()
 
@@ -899,18 +900,14 @@ async function saveMappingMatrix() {
 function setMessage(type, text) {
   clearFeedbackTimer()
   message.type = type
-  message.text = text
-  if (['error', 'success-dialog'].includes(type) && text) {
-    focusFeedbackDialog()
-    feedbackTimer = window.setTimeout(() => {
-      clearMessage()
-    }, 3000)
-  }
+  message.text = ''
+  showFeedback(type, text)
 }
 
 function clearMessage() {
   clearFeedbackTimer()
   message.text = ''
+  showFeedback('', '')
 }
 
 function clearFeedbackTimer() {
@@ -920,15 +917,8 @@ function clearFeedbackTimer() {
   }
 }
 
-async function focusFeedbackDialog() {
-  await nextTick()
-  feedbackDialog.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  feedbackDialog.value?.focus({ preventScroll: true })
-}
-
 async function setFieldError(text, selector) {
-  message.type = 'error'
-  message.text = text
+  showFeedback('error', text)
   await nextTick()
 
   const target = pageRoot.value?.querySelector(selector)
@@ -938,7 +928,6 @@ async function setFieldError(text, selector) {
     return
   }
 
-  focusFeedbackDialog()
 }
 
 function createObjective() {
@@ -1881,6 +1870,57 @@ onBeforeUnmount(() => {
 
 .editable-table {
   min-width: 980px;
+}
+
+.teaching-content-table {
+  min-width: 1120px;
+}
+
+.teaching-content-table th:nth-child(2),
+.teaching-content-table th:nth-child(3),
+.teaching-content-table td:nth-child(2),
+.teaching-content-table td:nth-child(3) {
+  width: 82px;
+  min-width: 82px;
+}
+
+.teaching-content-table th:nth-child(6),
+.teaching-content-table td:nth-child(6) {
+  width: 340px;
+  min-width: 340px;
+}
+
+.teaching-content-table td:nth-child(6) .mini-area {
+  min-width: 320px;
+}
+
+.teaching-content-table td:nth-child(2) .number-input,
+.teaching-content-table td:nth-child(3) .number-input {
+  min-width: 62px;
+}
+
+.assessment-detail-table {
+  min-width: 1120px;
+}
+
+.assessment-detail-table th:nth-child(2),
+.assessment-detail-table td:nth-child(2) {
+  width: 88px;
+  min-width: 88px;
+}
+
+.assessment-detail-table th:nth-child(3),
+.assessment-detail-table td:nth-child(3) {
+  width: 330px;
+  min-width: 330px;
+}
+
+.assessment-detail-table td:nth-child(3) .mini-area {
+  min-width: 310px;
+}
+
+.assessment-detail-table td:nth-child(2) .number-input {
+  min-width: 66px;
 }
 
 .editable-table td {
