@@ -4,7 +4,7 @@
       <div class="brand-mark">CO</div>
       <div>
         <div class="brand-title">教学目标达成系统</div>
-        <div class="brand-sub">教师端工作台</div>
+        <div class="brand-sub">{{ authStore.isAdmin ? '超级管理员工作台' : '教师端工作台' }}</div>
       </div>
     </div>
 
@@ -27,12 +27,15 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
+const authStore = useAuthStore()
 
 // 侧边栏按照实际业务流程组织，便于用户理解“先管目标，再采集数据，最后分析改进”。
-const menuGroups = [
+const baseMenuGroups = [
   {
     title: '工作台',
     items: [{ label: '首页概览', to: '/dashboard' }]
@@ -59,6 +62,23 @@ const menuGroups = [
     ]
   }
 ]
+
+const menuGroups = computed(() => {
+  const groups = baseMenuGroups.map((group) => ({
+    ...group,
+    items: [...group.items]
+  }))
+  if (authStore.isAdmin) {
+    groups.push({
+      title: '系统管理',
+      items: [
+        { label: '用户管理', to: '/admin/users' },
+        { label: '基础信息管理', to: '/admin/catalogs' }
+      ]
+    })
+  }
+  return groups
+})
 
 function isActive(path) {
   // 编辑页不单独出现在侧边栏，仍归到“课程管理”入口。

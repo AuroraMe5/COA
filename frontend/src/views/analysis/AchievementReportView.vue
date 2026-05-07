@@ -6,7 +6,7 @@
     >
       <template #actions>
         <button class="btn btn-light" :disabled="metaLoading || !hasCalcResult" @click="loadReportMeta">
-          {{ metaLoading ? '读取中...' : '预览报告信息' }}
+          {{ metaLoading ? '读取中...' : reportMeta ? '刷新完整预览' : '生成完整预览' }}
         </button>
         <button class="btn btn-primary" :disabled="downloading || !hasCalcResult" @click="handleDownload">
           {{ downloading ? '生成中...' : '下载报告' }}
@@ -37,7 +37,7 @@
 
     <PanelCard title="报告数据状态" subtitle="报告只读取当前课程学期最近一次已保存的达成度核算结果。">
       <div v-if="hasCalcResult" class="grid-2">
-        <StatCard label="课程整体达成度" :value="Number(record.overallAchievement || 0).toFixed(3)" tone="primary" />
+        <StatCard label="课程整体达成度" :value="formatRatio(record.overallAchievement)" tone="primary" />
         <StatCard label="最近核算时间" :value="record.generatedAt || '--'" tone="secondary" />
       </div>
       <div v-else class="notice warning">
@@ -45,59 +45,57 @@
       </div>
     </PanelCard>
 
-    <PanelCard v-if="hasCalcResult" title="报告预览" subtitle="预览报告将写入的关键统计项，确认后可导出 Word。">
-      <div class="export-section">
-        <div v-if="reportMeta" class="meta-preview">
-          <StatCard label="参与学生" :value="`${reportMeta.studentCount} 人`" tone="primary" />
+    <PanelCard
+      v-if="hasCalcResult"
+      title="报告完整预览"
+      subtitle="预览内容按导出 Word 的封面、章节、表格和附录同步生成。"
+    >
+      <div v-if="!reportMeta" class="notice info">
+        点击“生成完整预览”读取与导出 Word 一致的报告内容。
+      </div>
+
+      <div v-else class="report-preview">
+        <div class="preview-summary-grid">
+          <StatCard label="预览课程" :value="reportCourseTitle" tone="primary" />
+          <StatCard label="参与学生" :value="`${reportMeta.studentCount || 0} 人`" tone="secondary" />
+          <StatCard label="课程整体达成度" :value="formatRatio(reportMeta.overallAchievement)" tone="success" />
           <StatCard
             label="低达成度学生"
-            :value="`${reportMeta.weakStudentCount} 人`"
-            :tone="reportMeta.weakStudentCount > 0 ? 'warning' : 'success'"
-          />
-          <StatCard
-            v-for="obj in reportMeta.objectives"
-            :key="obj.id"
-            :label="obj.name"
-            :value="`${(Number(obj.achievement || 0) * 100).toFixed(1)}%`"
-            :helper="obj.judgement"
-            :tone="Number(obj.achievement || 0) >= 0.6 ? 'success' : 'warning'"
+            :value="`${reportMeta.weakStudentCount || 0} 人`"
+            :tone="Number(reportMeta.weakStudentCount || 0) > 0 ? 'warning' : 'success'"
           />
         </div>
 
-        <div v-else class="notice info">
-          点击“预览报告信息”读取课程目标达成度、成绩分布和改进建议摘要。
+        <div class="report-paper">
+          <section v-for="section in reportSections" :key="section.title" class="report-section">
+            <h2>{{ section.title }}</h2>
+            <template v-for="(block, blockIndex) in section.blocks || []" :key="`${section.title}-${blockIndex}`">
+              <h3 v-if="block.type === 'subtitle'">{{ block.text }}</h3>
+              <p v-else-if="block.type === 'paragraph'" class="report-paragraph">{{ block.text }}</p>
+              <ol v-else-if="block.type === 'list'" class="report-list">
+                <li v-for="item in block.items || []" :key="item">{{ item }}</li>
+              </ol>
+              <div v-else-if="block.type === 'table'" class="report-table-shell">
+                <table class="report-table">
+                  <thead>
+                    <tr>
+                      <th v-for="(header, headerIndex) in block.headers || []" :key="`${headerIndex}-${header}`">
+                        {{ header }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, rowIndex) in block.rows || []" :key="rowIndex">
+                      <td v-for="(cell, cellIndex) in normalizedRow(row, block.headers)" :key="cellIndex">
+                        <span v-for="(line, lineIndex) in splitCell(cell)" :key="lineIndex">{{ line }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </section>
         </div>
-
-        <div v-if="reportMeta?.smartAnalysis" class="report-analysis">
-          <strong>报告智能摘要</strong>
-          <p>{{ reportMeta.smartAnalysis.summary }}</p>
-          <div class="report-actions">
-            <span v-for="item in reportMeta.smartAnalysis.improvements" :key="item">{{ item }}</span>
-          </div>
-        </div>
-
-        <div v-if="reportMeta?.gradeDistribution?.length" class="table-shell">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>分数段</th>
-                <th>人数</th>
-                <th>占比</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in reportMeta.gradeDistribution" :key="item.label">
-                <td>{{ item.label }}</td>
-                <td>{{ item.count }}</td>
-                <td>{{ Number(item.pct || 0).toFixed(2) }}%</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p class="export-desc">
-          导出的报告包含课程概况、目标支撑关系、成绩评定方法、成绩统计与试题分析、课程目标达成情况、分段达成情况、总结与改进建议。
-        </p>
       </div>
     </PanelCard>
   </div>
@@ -140,10 +138,34 @@ const message = reactive({
 
 const hasCalcResult = computed(() => Boolean(currentOutlineId.value && record.config.calcRuleId && record.generatedAt))
 
+const reportSections = computed(() => reportMeta.value?.sections || [])
+
+const reportCourseTitle = computed(() => {
+  const info = reportMeta.value?.courseInfo || {}
+  return info.name ? `${info.name}（${info.code || '--'}）` : '--'
+})
+
 function setMessage(type, text) {
   message.type = type
   message.text = ''
   showFeedback(type, text)
+}
+
+function formatRatio(value) {
+  return Number(value || 0).toFixed(3)
+}
+
+function normalizedRow(row, headers = []) {
+  const cells = Array.isArray(row) ? [...row] : []
+  const minLength = Array.isArray(headers) ? headers.length : 0
+  while (cells.length < minLength) {
+    cells.push('')
+  }
+  return cells
+}
+
+function splitCell(value) {
+  return String(value ?? '').split(/\n+/)
 }
 
 function applyRecord(payload = {}) {
@@ -212,48 +234,111 @@ onMounted(loadPage)
 </script>
 
 <style scoped>
-.export-section {
+.report-preview {
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
-.meta-preview {
+.preview-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
 }
 
-.export-desc {
-  margin: 0;
-  color: var(--color-text-soft);
-  line-height: 1.8;
-}
-
-.report-analysis {
+.report-paper {
   display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid #e3edf2;
+  gap: 24px;
+  padding: 26px;
+  border: 1px solid #dfe9ee;
   border-radius: 8px;
-  background: #fbfdfe;
+  background: #fff;
 }
 
-.report-analysis p {
+.report-section {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid #edf2f5;
+}
+
+.report-section:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.report-section h2 {
   margin: 0;
-  color: var(--color-text-soft);
-  line-height: 1.8;
+  color: var(--color-primary-deep);
+  font-size: 19px;
+  line-height: 1.45;
 }
 
-.report-actions {
+.report-section h3 {
+  margin: 6px 0 0;
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.report-paragraph {
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.9;
+}
+
+.report-list {
   display: grid;
   gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--color-text);
+  line-height: 1.8;
 }
 
-.report-actions span {
-  padding: 8px 10px;
-  border-left: 3px solid var(--color-primary);
+.report-table-shell {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid #e1ebf0;
+  border-radius: 8px;
   background: #fff;
-  color: var(--color-text);
+}
+
+.report-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.report-table th,
+.report-table td {
+  padding: 10px 12px;
+  border: 1px solid #e4edf2;
+  vertical-align: top;
+  text-align: left;
   line-height: 1.6;
+}
+
+.report-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f2f7fa;
+  color: var(--color-primary-deep);
+  font-weight: 700;
+}
+
+.report-table td span {
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .report-paper {
+    padding: 16px;
+  }
+
+  .report-table {
+    min-width: 640px;
+  }
 }
 </style>

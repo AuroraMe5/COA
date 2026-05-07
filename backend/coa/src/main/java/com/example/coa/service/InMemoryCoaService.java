@@ -98,6 +98,9 @@ public class InMemoryCoaService {
         if (!passwordEncoder.matches(password, stringValue(userRow.get("password_hash")))) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, 10001, "用户名或密码错误");
         }
+        if (intValue(userRow.get("status")) != 1) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, 10002, "账号已被禁用，请联系管理员");
+        }
 
         jdbcTemplate.update("""
             UPDATE sys_user
@@ -184,6 +187,81 @@ public class InMemoryCoaService {
             "courseOwner"
         ));
         return getCourseDetail(id, defaultString(payload.get("semester"), normalizeSemester(null)));
+    }
+
+    public Map<String, Object> createCourse(Map<String, Object> payload, AuthenticatedUser currentUser) {
+        if (currentUser == null) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, 10003, "missing current user");
+        }
+        String semesterCode = requireText(payload.get("semester"), "请选择开课学期。");
+        long semesterId = requireSemesterId(semesterCode);
+        String courseCode = requireText(payload.get("courseCode"), "课程编号不能为空。");
+        String courseName = requireText(payload.get("courseName"), "课程名称不能为空。");
+        validateMaxLength(courseCode, 30, "课程编号不能超过 30 个字符。");
+        validateMaxLength(courseName, 100, "课程名称不能超过 100 个字符。");
+        validateCourseCodeUnique(courseCode, null);
+
+        long collegeId = currentUser.collegeId() == null ? defaultCollegeId() : currentUser.collegeId();
+
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update("""
+            INSERT INTO base_course (
+                course_code, course_name, college_id, course_owner, created_by, status
+            ) VALUES (
+                :courseCode, :courseName, :collegeId, :courseOwner, :createdBy, 1
+            )
+            """, new MapSqlParameterSource()
+            .addValue("courseCode", courseCode)
+            .addValue("courseName", courseName)
+            .addValue("collegeId", collegeId)
+            .addValue("courseOwner", defaultString(currentUser.realName(), ""))
+            .addValue("createdBy", currentUser.id()), keyHolder);
+
+        long courseId = keyHolder.getKey().longValue();
+        ensureCourseTeacher(courseId, currentUser.id(), semesterId);
+        return getCourseDetail(courseId, semesterCode);
+    }
+
+    public Map<String, Object> deleteCourse(Long courseId, String semester, AuthenticatedUser currentUser) {
+        if (currentUser == null) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, 10003, "missing current user");
+        }
+        long id = longValue(courseId);
+        String semesterCode = requireText(semester, "请选择开课学期。");
+        long semesterId = requireSemesterId(semesterCode);
+        requireActiveCourse(id);
+
+        if (!currentUser.hasRole("ADMIN")
+            && (!isCourseCreator(id, currentUser.id()) || !isCourseTeacher(id, semesterId, currentUser.id()))) {
+            throw new ApiException(HttpStatus.FORBIDDEN, 403, "只能删除当前教师在所选学期负责的课程。");
+        }
+
+        jdbcTemplate.update("""
+            UPDATE course_teacher
+            SET status = 0,
+                updated_at = NOW()
+            WHERE course_id = :courseId
+              AND semester_id = :semesterId
+              AND (:isAdmin = 1 OR teacher_id = :teacherId)
+            """, new MapSqlParameterSource()
+            .addValue("courseId", id)
+            .addValue("semesterId", semesterId)
+            .addValue("teacherId", currentUser.id())
+            .addValue("isAdmin", currentUser.hasRole("ADMIN") ? 1 : 0));
+
+        jdbcTemplate.update("""
+            UPDATE base_course
+            SET status = 0,
+                updated_at = NOW()
+            WHERE id = :id
+            """, params("id", id));
+
+        return map(
+            "success", true,
+            "deletedCourseId", id,
+            "courses", catalogCourses(),
+            "semesters", catalogSemesters()
+        );
     }
 
     public Map<String, Object> updateCourseTeachingContents(Long courseId, String semester, Map<String, Object> payload) {
@@ -4166,6 +4244,7 @@ public class InMemoryCoaService {
                 c.credits,
                 c.prerequisite_course,
                 c.course_owner,
+                c.created_by,
                 c.college_id,
                 bc.college_name,
                 (
@@ -4200,6 +4279,7 @@ public class InMemoryCoaService {
             "credits", rs.getBigDecimal("credits"),
             "prerequisiteCourse", defaultString(rs.getString("prerequisite_course"), ""),
             "courseOwner", defaultString(rs.getString("course_owner"), ""),
+            "createdBy", nullableLong(rs.getObject("created_by")),
             "collegeId", nullableLong(rs.getObject("college_id")),
             "collegeName", defaultString(rs.getString("college_name"), ""),
             "semester", defaultString(rs.getString("semester_code"), normalizeSemester(null)),
@@ -4768,6 +4848,9 @@ public class InMemoryCoaService {
         ensureColumn("base_course", "credits",             "DECIMAL(3,1) NULL");
         ensureColumn("base_course", "prerequisite_course", "VARCHAR(255) NULL");
         ensureColumn("base_course", "course_owner",        "VARCHAR(100) NULL");
+        ensureColumn("base_course", "created_by",          "BIGINT NULL");
+        ensureIndex("base_course", "idx_base_course_created_by", List.of("created_by"));
+        ensureForeignKey("base_course", "fk_base_course_creator", "created_by", "sys_user", "id", "ON DELETE SET NULL");
         ensureColumnDefinition("base_course", "course_type", "VARCHAR(100) NULL", "varchar(100)", "YES", null, null);
         ensureColumn("parse_task",  "parsed_course_json",   "TEXT NULL");
         ensureColumn("parse_task",  "parsed_mapping_json",  "TEXT NULL");
@@ -5690,6 +5773,7 @@ public class InMemoryCoaService {
                 c.credits,
                 c.prerequisite_course,
                 c.course_owner,
+                c.created_by,
                 c.college_id,
                 c.major_id,
                 bc.college_name
@@ -5709,6 +5793,7 @@ public class InMemoryCoaService {
             "credits", rs.getBigDecimal("credits"),
             "prerequisiteCourse", defaultString(rs.getString("prerequisite_course"), ""),
             "courseOwner", defaultString(rs.getString("course_owner"), ""),
+            "createdBy", nullableLong(rs.getObject("created_by")),
             "collegeId", nullableLong(rs.getObject("college_id")),
             "majorId", nullableLong(rs.getObject("major_id")),
             "collegeName", defaultString(rs.getString("college_name"), "")
@@ -5785,10 +5870,10 @@ public class InMemoryCoaService {
         jdbcTemplate.update("""
             INSERT INTO base_course (
                 course_code, course_name, course_name_en, credits, hours, course_type,
-                college_id, major_id, target_students, teaching_language, prerequisite_course, course_owner, status
+                college_id, major_id, target_students, teaching_language, prerequisite_course, course_owner, created_by, status
             ) VALUES (
                 :courseCode, :courseName, :courseNameEn, :credits, :hours, :courseType,
-                :collegeId, :majorId, :targetStudents, :teachingLanguage, :prerequisiteCourse, :courseOwner, 1
+                :collegeId, :majorId, :targetStudents, :teachingLanguage, :prerequisiteCourse, :courseOwner, :createdBy, 1
             )
             """, new MapSqlParameterSource()
             .addValue("courseCode", courseCode)
@@ -5802,7 +5887,8 @@ public class InMemoryCoaService {
             .addValue("targetStudents", defaultString(courseInfo.get("targetStudents"), ""))
             .addValue("teachingLanguage", defaultString(courseInfo.get("teachingLanguage"), ""))
             .addValue("prerequisiteCourse", defaultString(courseInfo.get("prerequisiteCourse"), ""))
-            .addValue("courseOwner", defaultString(courseInfo.get("courseOwner"), "")), keyHolder);
+            .addValue("courseOwner", defaultString(courseInfo.get("courseOwner"), ""))
+            .addValue("createdBy", teacherId), keyHolder);
 
         long courseId = keyHolder.getKey().longValue();
         ensureCourseTeacher(courseId, teacherId, semesterId);
@@ -5830,6 +5916,72 @@ public class InMemoryCoaService {
             .addValue("courseId", courseId)
             .addValue("teacherId", teacherId)
             .addValue("semesterId", semesterId));
+    }
+
+    private String requireText(Object value, String message) {
+        String text = defaultString(value, "");
+        if (!StringUtils.hasText(text)) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, message);
+        }
+        return text;
+    }
+
+    private void validateMaxLength(String value, int maxLength, String message) {
+        if (value != null && value.length() > maxLength) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, message);
+        }
+    }
+
+    private long defaultCollegeId() {
+        Long collegeId = jdbcTemplate.query("""
+            SELECT id
+            FROM base_college
+            WHERE status = 1
+            ORDER BY id ASC
+            LIMIT 1
+            """, new MapSqlParameterSource(), rs -> rs.next() ? rs.getLong("id") : null);
+        if (collegeId == null) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "Please configure an active college before creating courses.");
+        }
+        return collegeId;
+    }
+
+    private void requireActiveCourse(long courseId) {
+        long exists = count("""
+            SELECT COUNT(*)
+            FROM base_course
+            WHERE id = :courseId
+              AND status = 1
+            """, params("courseId", courseId));
+        if (exists == 0) {
+            throw new ApiException(HttpStatus.NOT_FOUND, 404, "Course not found.");
+        }
+    }
+
+    private boolean isCourseTeacher(long courseId, long semesterId, long teacherId) {
+        return count("""
+            SELECT COUNT(*)
+            FROM course_teacher
+            WHERE course_id = :courseId
+              AND semester_id = :semesterId
+              AND teacher_id = :teacherId
+              AND status = 1
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("semesterId", semesterId)
+            .addValue("teacherId", teacherId)) > 0;
+    }
+
+    private boolean isCourseCreator(long courseId, long userId) {
+        return count("""
+            SELECT COUNT(*)
+            FROM base_course
+            WHERE id = :courseId
+              AND created_by = :userId
+              AND status = 1
+            """, new MapSqlParameterSource()
+            .addValue("courseId", courseId)
+            .addValue("userId", userId)) > 0;
     }
 
     private void validateCourseCodeUnique(String courseCode, Long currentCourseId) {

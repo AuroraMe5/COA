@@ -141,6 +141,76 @@ export function getCurrentUser(accessToken) {
   return getData('/auth/me', { headers })
 }
 
+// 超级管理员：教师账号管理
+export function getTeacherUsers(params) {
+  return getData('/admin/teachers', { params })
+}
+
+export function createTeacherUser(payload) {
+  return postData('/admin/teachers', payload)
+}
+
+export function resetTeacherPassword(id, payload) {
+  return patchData(`/admin/teachers/${id}/password`, payload)
+}
+
+export function updateTeacherStatus(id, payload) {
+  return patchData(`/admin/teachers/${id}/status`, payload)
+}
+
+export function deleteTeacherUser(id) {
+  return request.delete(`/admin/teachers/${id}`).then(({ data }) => data)
+}
+
+// 超级管理员：学院、专业、学期基础信息管理
+export function getAdminColleges(params) {
+  return getData('/admin/colleges', { params })
+}
+
+export function createAdminCollege(payload) {
+  return postData('/admin/colleges', payload)
+}
+
+export function updateAdminCollege(id, payload) {
+  return putData(`/admin/colleges/${id}`, payload)
+}
+
+export function deleteAdminCollege(id) {
+  return request.delete(`/admin/colleges/${id}`).then(({ data }) => data)
+}
+
+export function getAdminMajors(params) {
+  return getData('/admin/majors', { params })
+}
+
+export function createAdminMajor(payload) {
+  return postData('/admin/majors', payload)
+}
+
+export function updateAdminMajor(id, payload) {
+  return putData(`/admin/majors/${id}`, payload)
+}
+
+export function deleteAdminMajor(id) {
+  return request.delete(`/admin/majors/${id}`).then(({ data }) => data)
+}
+
+export function getAdminSemesters(params) {
+  return getData('/admin/semesters', { params })
+}
+
+export function createAdminSemester(payload) {
+  return postData('/admin/semesters', payload)
+}
+
+export function updateAdminSemester(id, payload) {
+  return putData(`/admin/semesters/${id}`, payload)
+}
+
+export function deleteAdminSemester(id) {
+  return request.delete(`/admin/semesters/${id}`).then(({ data }) => data)
+}
+
 // 公共目录数据
 export function getReferenceCatalogs() {
   return getData('/reference/catalogs')
@@ -150,8 +220,16 @@ export function getCourseDetail(id, params) {
   return getData(`/courses/${id}`, { params })
 }
 
+export function createCourse(payload) {
+  return postData('/courses', payload)
+}
+
 export function updateCourse(id, payload) {
   return putData(`/courses/${id}`, payload)
+}
+
+export function deleteCourse(id, params) {
+  return request.delete(`/courses/${id}`, { params }).then(({ data }) => data)
 }
 
 export function updateCourseTeachingContents(id, semester, payload) {

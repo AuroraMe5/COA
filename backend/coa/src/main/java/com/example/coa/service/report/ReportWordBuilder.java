@@ -2,6 +2,8 @@ package com.example.coa.service.report;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -63,6 +65,302 @@ public class ReportWordBuilder {
             doc.write(out);
             return out.toByteArray();
         }
+    }
+
+    public Map<String, Object> buildPreview(ReportContext ctx) {
+        Map<String, Object> courseInfo = map(
+            "id", ctx.courseInfo.id,
+            "code", ctx.courseInfo.code,
+            "name", ctx.courseInfo.name,
+            "semester", ctx.outlineInfo.semester,
+            "semesterName", safe(ctx.outlineInfo.semesterName, ctx.outlineInfo.semester)
+        );
+
+        List<Map<String, Object>> sections = List.of(
+            previewCover(ctx),
+            previewSection1(ctx),
+            previewSection2(ctx),
+            previewSection3(ctx),
+            previewSection4(ctx),
+            previewSection5(ctx),
+            previewSection6(ctx),
+            previewSection7(ctx),
+            previewSection9(ctx),
+            previewAppendixA(ctx),
+            previewAppendixB(ctx)
+        );
+
+        return map(
+            "courseInfo", courseInfo,
+            "studentCount", ctx.studentCount,
+            "weakStudentCount", ctx.weakStudents.size(),
+            "overallAchievement", ctx.overallAchievement,
+            "generatedAt", ctx.generatedAt,
+            "sections", sections
+        );
+    }
+
+    private Map<String, Object> previewCover(ReportContext ctx) {
+        return section("封面", List.of(
+            paragraph("重庆理工大学"),
+            paragraph("本科生课程目标达成情况评价及总结报告"),
+            paragraph(safe(ctx.outlineInfo.semesterName, ctx.outlineInfo.semester)),
+            table(List.of("项目", "内容"), List.of(
+                row("课程", safe(ctx.courseInfo.name, "未命名课程")),
+                row("学年学期", safe(ctx.outlineInfo.semesterName, ctx.outlineInfo.semester))
+            ))
+        ));
+    }
+
+    private Map<String, Object> previewSection1(ReportContext ctx) {
+        return section("一 课程概况", List.of(
+            table(List.of("项目", "内容", "项目", "内容"), List.of(
+                row("课程名称", ctx.courseInfo.name, "学时", value(ctx.courseInfo.hours)),
+                row("课程所属系室", safe(ctx.courseInfo.department, ""), "学分", value(ctx.courseInfo.credits)),
+                row("课程所属学院", safe(ctx.courseInfo.school, ""), "命题教师", safe(ctx.courseInfo.teacher, ctx.outlineInfo.teacher)),
+                row("考试班级", safe(ctx.outlineInfo.className, ""), "", ""),
+                row("总结人", safe(ctx.outlineInfo.teacher, ""), "总结日期", ctx.outlineInfo.reportDate),
+                row("审核人", "", "学院教学指导委员会", "")
+            ))
+        ));
+    }
+
+    private Map<String, Object> previewSection2(ReportContext ctx) {
+        List<List<String>> rows = ctx.objectives.stream()
+            .map(objective -> row(
+                objective.code,
+                objective.content,
+                safe(objective.relationLevel, "H"),
+                safe(objective.gradReqId, "待补充"),
+                safe(objective.gradReqDesc, "由" + objective.code + "支撑的毕业要求说明待补充。")
+            ))
+            .toList();
+        return section("二 课程目标对毕业要求的支撑", List.of(
+            table(List.of("课程目标", "简述", "关联程度", "毕业要求", "简述"), rows)
+        ));
+    }
+
+    private Map<String, Object> previewSection3(ReportContext ctx) {
+        List<String> matrixHeaders = new ArrayList<>();
+        matrixHeaders.add("课程目标");
+        matrixHeaders.add("支撑毕业要求");
+        ctx.assessItems.forEach(item -> matrixHeaders.add(item.name));
+        matrixHeaders.add("成绩比例");
+
+        List<List<String>> matrixRows = new ArrayList<>();
+        for (ObjectiveInfo objective : ctx.objectives) {
+            List<String> cells = new ArrayList<>();
+            cells.add(objective.code);
+            cells.add(safe(objective.gradReqId, "待补充"));
+            for (AssessItemInfo item : ctx.assessItems) {
+                double cellWeight = objective.weight * contributionFor(ctx, objective.id, item.id) / 100D;
+                cells.add(percentWeight(cellWeight));
+            }
+            cells.add(percentWeight(objective.weight));
+            matrixRows.add(cells);
+        }
+        List<String> totalRow = new ArrayList<>();
+        totalRow.add("合计");
+        totalRow.add("");
+        for (AssessItemInfo item : ctx.assessItems) {
+            double total = ctx.objectives.stream()
+                .mapToDouble(objective -> objective.weight * contributionFor(ctx, objective.id, item.id) / 100D)
+                .sum();
+            totalRow.add(percentWeight(total));
+        }
+        totalRow.add("100%");
+        matrixRows.add(totalRow);
+
+        Map<Long, List<ObjAssessMapInfo>> mapsByItem = ctx.objAssessMaps.stream()
+            .collect(Collectors.groupingBy(map -> map.assessItemId));
+        List<List<String>> descRows = new ArrayList<>();
+        for (AssessItemInfo item : ctx.assessItems) {
+            List<String> objectives = mapsByItem.getOrDefault(item.id, List.of()).stream()
+                .map(map -> objectiveCode(ctx, map.objectiveId))
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+            descRows.add(row(
+                item.name,
+                percentWeight(item.weight),
+                item.typeName + "考核围绕课程目标进行过程或结果评价。",
+                "按评分标准折算为百分制成绩并参与达成度计算。",
+                objectives.isEmpty() ? "全部课程目标" : String.join("、", objectives)
+            ));
+        }
+
+        return section("三 课程成绩评定及目标达成评价方法", List.of(
+            subtitle("（一）课程目标考核及课程成绩评定方式"),
+            table(matrixHeaders, matrixRows),
+            subtitle("（二）课程目标考核及成绩评定方式描述"),
+            table(List.of("考核方式", "权重", "考核内容", "评价办法", "支撑目标"), descRows)
+        ));
+    }
+
+    private Map<String, Object> previewSection4(ReportContext ctx) {
+        List<List<String>> distributionRows = List.of(
+            row("人数",
+                count(ctx.gradeDistribution, "优"),
+                count(ctx.gradeDistribution, "良"),
+                count(ctx.gradeDistribution, "中"),
+                count(ctx.gradeDistribution, "及格"),
+                count(ctx.gradeDistribution, "不及格")),
+            row("百分比",
+                pct(ctx.gradeDistribution, "优"),
+                pct(ctx.gradeDistribution, "良"),
+                pct(ctx.gradeDistribution, "中"),
+                pct(ctx.gradeDistribution, "及格"),
+                pct(ctx.gradeDistribution, "不及格"))
+        );
+
+        List<List<String>> statRows = ctx.componentStats.stream()
+            .map(stat -> row(
+                stat.typeName,
+                number(stat.avgScore),
+                number(stat.maxScore),
+                number(stat.minScore),
+                percent(stat.passRate)
+            ))
+            .toList();
+
+        return section("四 成绩统计与试题分析", List.of(
+            table(List.of("成绩", "优[90,100]", "良[80,90)", "中[70,80)", "及格[60,70)", "不及格[0,60)"), distributionRows),
+            table(List.of("评价方式", "平均分", "最高分", "最低分", "及格率"), statRows),
+            subtitle("试题分析"),
+            paragraph(analyzer.generateExamAnalysis(ctx)),
+            subtitle("成绩分析"),
+            paragraph(analyzer.generateScoreAnalysis(ctx))
+        ));
+    }
+
+    private Map<String, Object> previewSection5(ReportContext ctx) {
+        List<List<String>> achievementRows = ctx.objectiveAchievements.stream()
+            .map(item -> row(
+                item.objectiveCode,
+                scoreNumber(item.totalScore),
+                scoreNumber(item.avgScore),
+                percent(item.achievement)
+            ))
+            .toList();
+
+        List<List<String>> segmentedRows = ctx.objectiveAchievements.stream()
+            .map(item -> {
+                Map<String, Double> bands = ctx.objectiveBandAchievements.getOrDefault(item.objectiveCode, Map.of());
+                return row(
+                    item.objectiveCode,
+                    percent(item.achievement),
+                    percent(bands.getOrDefault("优", 0D)),
+                    percent(bands.getOrDefault("良", 0D)),
+                    percent(bands.getOrDefault("中", 0D)),
+                    percent(bands.getOrDefault("及格", 0D)),
+                    percent(bands.getOrDefault("不及格", 0D))
+                );
+            })
+            .toList();
+
+        return section("五 课程目标达成情况", List.of(
+            paragraph("本课程考核总分为100分，对全体学生进行统计，课程目标达成情况如下。"),
+            table(List.of("课程目标", "考核总分", "考核平均分", "课程目标达成情况"), achievementRows),
+            paragraph("各分数段的课程目标达成情况如下。"),
+            table(List.of("课程目标", "达成情况值", "[90,100]分数段", "[80,90)分数段", "[70,80)分数段", "[60,70)分数段", "60分以下"), segmentedRows)
+        ));
+    }
+
+    private Map<String, Object> previewSection6(ReportContext ctx) {
+        Map<Long, List<ObjAssessMapInfo>> mapsByObjective = ctx.objAssessMaps.stream()
+            .collect(Collectors.groupingBy(map -> map.objectiveId));
+        List<List<String>> rows = new ArrayList<>();
+        for (ObjectiveInfo objective : ctx.objectives) {
+            List<AssessItemInfo> items = mapsByObjective.getOrDefault(objective.id, List.of()).stream()
+                .map(map -> assessItem(ctx, map.assessItemId))
+                .filter(item -> item != null)
+                .distinct()
+                .toList();
+            String names = items.isEmpty()
+                ? "平时作业、实验项目、期末考核"
+                : items.stream().map(item -> item.name).collect(Collectors.joining("、"));
+            rows.add(row(
+                objective.code,
+                achievementPath(objective),
+                names,
+                "根据" + names + "分数给出量化评价值。"
+            ));
+        }
+
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        blocks.add(table(List.of("课程目标", "达成途径", "评价依据", "评价方式"), rows));
+        blocks.add(subtitle("课程目标达成情况分析"));
+        ctx.objectiveAchievements.forEach(item ->
+            blocks.add(paragraph(analyzer.analyzeObjective(item, ctx.componentStats, item.objectiveDesc))));
+        blocks.add(subtitle("课程目标达成的具体措施"));
+        blocks.add(numberedList(analyzer.generateImprovements(ctx, ctx.existingSuggestions)));
+        blocks.add(subtitle("课程目标达成情况"));
+        blocks.add(paragraph(analyzer.generateThresholdSummary(ctx)));
+        return section("六 课程目标达成情况报表", blocks);
+    }
+
+    private Map<String, Object> previewSection7(ReportContext ctx) {
+        return section("七 课程考核方式合理性", List.of(
+            paragraph(analyzer.generateAssessmentRationalityIntro(ctx)),
+            table(List.of("考核方式合理性", "评价结论", "改进方向"), List.of(
+                row("考核内容合理性", "考核内容与教学大纲内容完全符合。", "下一轮考核可继续优化重点难点覆盖。"),
+                row("考核方式合理性", "采用平时作业、实验项目、期末考核等多种方式，可合理评价课程目标达成情况。", "下一轮考核可进一步细化过程性评价记录。"),
+                row("考核数据合理性", "各类原始成绩与课程目标相关性良好。", "下一轮考核可补充分项数据校验。"),
+                row("考核标准合理性", "评价标准明确，可对课程目标达成形成导向。", "下一轮考核可提升评分细则的可操作性。"),
+                row("成绩判定", "严格", "保持统一评分尺度。"),
+                row("综上", "本课程达成度评价依据自评为完全合理。", "下一轮考核可改进。")
+            ))
+        ));
+    }
+
+    private Map<String, Object> previewSection9(ReportContext ctx) {
+        return section("九 课程目标达成情况、改进举措及应用方法", List.of(
+            table(List.of("课程目标达成情况", "改进举措", "应用方法"), List.of(
+                row(
+                    analyzer.generateAchievementSummary(ctx),
+                    String.join("\n", analyzer.generateImprovements(ctx, ctx.existingSuggestions)),
+                    "改进课堂教学方法；改进课程考核标准；持续优化大纲、考核项与课程目标映射。"
+                )
+            ))
+        ));
+    }
+
+    private Map<String, Object> previewAppendixA(ReportContext ctx) {
+        List<String> headers = new ArrayList<>();
+        headers.add("学号");
+        headers.add("姓名");
+        ctx.objectives.forEach(objective -> headers.add(objective.code + "得分"));
+        ctx.objectives.forEach(objective -> headers.add(objective.code + "达成度"));
+
+        List<List<String>> rows = new ArrayList<>();
+        for (StudentAchievementDetail detail : ctx.studentDetails) {
+            List<String> cells = new ArrayList<>();
+            cells.add(safe(detail.studentNo, ""));
+            cells.add(safe(detail.studentName, ""));
+            ctx.objectives.forEach(objective -> cells.add(number(detail.objectiveScores.getOrDefault(objective.code, 0D))));
+            ctx.objectives.forEach(objective -> cells.add(number(detail.objectiveAchievements.getOrDefault(objective.code, 0D))));
+            rows.add(cells);
+        }
+        return section("附录A：全体学生各目标达成度明细", List.of(
+            table(headers, rows)
+        ));
+    }
+
+    private Map<String, Object> previewAppendixB(ReportContext ctx) {
+        List<List<String>> rows = ctx.studentScoreSummaries.stream()
+            .map(item -> row(
+                item.studentNo,
+                item.studentName,
+                number(item.normalScore),
+                number(item.practiceScore),
+                number(item.finalScore),
+                number(item.totalScore),
+                item.gradeLevel
+            ))
+            .toList();
+        return section("附录B：全体学生总成绩明细", List.of(
+            table(List.of("学号", "姓名", "平时成绩", "实验成绩", "期末成绩", "总成绩", "等级"), rows)
+        ));
     }
 
     private void setupPageLayout(XWPFDocument doc) {
@@ -366,6 +664,42 @@ public class ReportWordBuilder {
                 number(item.totalScore),
                 item.gradeLevel);
         }
+    }
+
+    private Map<String, Object> section(String title, List<Map<String, Object>> blocks) {
+        return map("title", title, "blocks", blocks);
+    }
+
+    private Map<String, Object> paragraph(String text) {
+        return map("type", "paragraph", "text", safe(text, ""));
+    }
+
+    private Map<String, Object> subtitle(String text) {
+        return map("type", "subtitle", "text", safe(text, ""));
+    }
+
+    private Map<String, Object> numberedList(List<String> items) {
+        return map("type", "list", "items", items == null ? List.of() : items);
+    }
+
+    private Map<String, Object> table(List<String> headers, List<List<String>> rows) {
+        return map("type", "table", "headers", headers == null ? List.of() : headers, "rows", rows == null ? List.of() : rows);
+    }
+
+    private List<String> row(String... values) {
+        List<String> cells = new ArrayList<>();
+        for (String value : values) {
+            cells.add(safe(value, ""));
+        }
+        return cells;
+    }
+
+    private Map<String, Object> map(Object... entries) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < entries.length; i += 2) {
+            result.put(String.valueOf(entries[i]), entries[i + 1]);
+        }
+        return result;
     }
 
     private double contributionFor(ReportContext ctx, Long objectiveId, Long assessItemId) {

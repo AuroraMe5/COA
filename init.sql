@@ -7,6 +7,7 @@ CREATE DATABASE IF NOT EXISTS `coa`
 
 USE `coa`;
 
+-- 清理旧版本残留表以及当前表，保证初始化脚本可重复执行。
 DROP TABLE IF EXISTS `improve_measure`;
 DROP TABLE IF EXISTS `intelligent_suggestion`;
 DROP TABLE IF EXISTS `suggestion_rule`;
@@ -155,6 +156,7 @@ CREATE TABLE `base_course` (
   `course_owner` VARCHAR(100) DEFAULT NULL COMMENT '课程负责人',
   `college_id` BIGINT NOT NULL COMMENT '开课学院ID',
   `major_id` BIGINT DEFAULT NULL COMMENT '所属专业ID',
+  `created_by` BIGINT DEFAULT NULL COMMENT '创建人ID',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -162,8 +164,10 @@ CREATE TABLE `base_course` (
   UNIQUE KEY `uk_base_course_code` (`course_code`),
   KEY `idx_base_course_college` (`college_id`),
   KEY `idx_base_course_major` (`major_id`),
+  KEY `idx_base_course_created_by` (`created_by`),
   CONSTRAINT `fk_base_course_college` FOREIGN KEY (`college_id`) REFERENCES `base_college` (`id`),
-  CONSTRAINT `fk_base_course_major` FOREIGN KEY (`major_id`) REFERENCES `base_major` (`id`)
+  CONSTRAINT `fk_base_course_major` FOREIGN KEY (`major_id`) REFERENCES `base_major` (`id`),
+  CONSTRAINT `fk_base_course_creator` FOREIGN KEY (`created_by`) REFERENCES `sys_user` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='课程表';
 
 CREATE TABLE `course_teacher` (
@@ -562,76 +566,6 @@ CREATE TABLE `student_grade` (
   CONSTRAINT `fk_student_grade_creator` FOREIGN KEY (`created_by`) REFERENCES `sys_user` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学生成绩表';
 
-CREATE TABLE `student_eval` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '学生评价ID',
-  `course_id` BIGINT NOT NULL COMMENT '课程ID',
-  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
-  `student_no` VARCHAR(20) NOT NULL COMMENT '学号',
-  `student_name` VARCHAR(50) DEFAULT NULL COMMENT '学生姓名',
-  `content` TEXT DEFAULT NULL COMMENT '评价内容',
-  `score` DECIMAL(4,1) DEFAULT NULL COMMENT '综合评价分',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_student_eval_scope` (`course_id`, `semester_id`),
-  KEY `idx_student_eval_student` (`student_no`),
-  CONSTRAINT `fk_student_eval_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
-  CONSTRAINT `fk_student_eval_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学生评价表';
-
-CREATE TABLE `student_eval_dimension` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '学生评价维度ID',
-  `eval_id` BIGINT NOT NULL COMMENT '学生评价ID',
-  `dimension_key` VARCHAR(50) NOT NULL COMMENT '维度编码',
-  `dimension_name` VARCHAR(50) NOT NULL COMMENT '维度名称',
-  `dimension_score` DECIMAL(4,1) DEFAULT NULL COMMENT '维度得分',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_student_eval_dimension` (`eval_id`, `dimension_key`),
-  CONSTRAINT `fk_student_eval_dimension_eval` FOREIGN KEY (`eval_id`) REFERENCES `student_eval` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学生评价维度表';
-
-CREATE TABLE `teacher_reflection` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '教学反思ID',
-  `outline_id` BIGINT NOT NULL COMMENT '大纲ID',
-  `course_id` BIGINT NOT NULL COMMENT '课程ID',
-  `teacher_id` BIGINT NOT NULL COMMENT '教师ID',
-  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
-  `problem_summary` TEXT DEFAULT NULL COMMENT '问题概述',
-  `reason_analysis` TEXT DEFAULT NULL COMMENT '原因分析',
-  `improvement_plan` TEXT DEFAULT NULL COMMENT '改进计划',
-  `next_action` TEXT DEFAULT NULL COMMENT '后续动作',
-  `strengths` TEXT DEFAULT NULL COMMENT '教学优点',
-  `weaknesses` TEXT DEFAULT NULL COMMENT '教学不足',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_teacher_reflection_scope` (`outline_id`, `teacher_id`, `semester_id`),
-  KEY `idx_teacher_reflection_course` (`course_id`),
-  CONSTRAINT `fk_teacher_reflection_outline` FOREIGN KEY (`outline_id`) REFERENCES `outline_main` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_teacher_reflection_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
-  CONSTRAINT `fk_teacher_reflection_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`),
-  CONSTRAINT `fk_teacher_reflection_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='教学反思表';
-
-CREATE TABLE `supervisor_eval` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '督导评价ID',
-  `course_id` BIGINT NOT NULL COMMENT '课程ID',
-  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
-  `supervisor_id` BIGINT NOT NULL COMMENT '督导人ID',
-  `score` DECIMAL(4,1) DEFAULT NULL COMMENT '督导评分',
-  `content` TEXT DEFAULT NULL COMMENT '评价内容',
-  `focus_items_json` JSON DEFAULT NULL COMMENT '关注点列表',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_supervisor_eval_scope` (`course_id`, `semester_id`),
-  KEY `idx_supervisor_eval_supervisor` (`supervisor_id`),
-  CONSTRAINT `fk_supervisor_eval_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
-  CONSTRAINT `fk_supervisor_eval_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`),
-  CONSTRAINT `fk_supervisor_eval_supervisor` FOREIGN KEY (`supervisor_id`) REFERENCES `sys_user` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='督导评价表';
-
 CREATE TABLE `calc_rule` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '核算规则ID',
   `rule_name` VARCHAR(50) NOT NULL COMMENT '规则名称',
@@ -688,19 +622,6 @@ CREATE TABLE `achieve_result_detail` (
   CONSTRAINT `fk_achieve_result_detail_item` FOREIGN KEY (`assess_item_id`) REFERENCES `assess_item` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='达成度结果明细表';
 
-CREATE TABLE `improve_suggestion` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '建议模板ID',
-  `achieve_range_min` DECIMAL(5,4) DEFAULT NULL COMMENT '适用达成度下限',
-  `achieve_range_max` DECIMAL(5,4) DEFAULT NULL COMMENT '适用达成度上限',
-  `suggestion_content` TEXT NOT NULL COMMENT '建议内容',
-  `category` VARCHAR(30) DEFAULT NULL COMMENT '建议分类',
-  `priority` TINYINT NOT NULL DEFAULT 2 COMMENT '1高 2中 3低',
-  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='改进建议模板库';
-
 CREATE TABLE `suggestion_rule` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '建议规则ID',
   `rule_code` VARCHAR(20) NOT NULL COMMENT '规则编码，如R01',
@@ -748,39 +669,9 @@ CREATE TABLE `intelligent_suggestion` (
   CONSTRAINT `fk_intelligent_suggestion_rule` FOREIGN KEY (`rule_id`) REFERENCES `suggestion_rule` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能建议实例表';
 
-CREATE TABLE `improve_measure` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '改进措施ID',
-  `suggestion_id` BIGINT DEFAULT NULL COMMENT '来源建议ID',
-  `course_id` BIGINT NOT NULL COMMENT '课程ID',
-  `objective_id` BIGINT DEFAULT NULL COMMENT '关联目标ID',
-  `teacher_id` BIGINT NOT NULL COMMENT '填报教师ID',
-  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
-  `problem_desc` TEXT NOT NULL COMMENT '问题描述',
-  `measure_content` TEXT NOT NULL COMMENT '改进措施内容',
-  `expected_effect` TEXT DEFAULT NULL COMMENT '预期效果',
-  `actual_effect` TEXT DEFAULT NULL COMMENT '实际效果',
-  `owner_name` VARCHAR(50) DEFAULT NULL COMMENT '责任人',
-  `deadline` DATE DEFAULT NULL COMMENT '完成期限',
-  `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0计划中 1进行中 2已完成',
-  `effect_summary` TEXT DEFAULT NULL COMMENT '效果总结',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_improve_measure_scope` (`course_id`, `semester_id`, `status`),
-  KEY `idx_improve_measure_teacher` (`teacher_id`),
-  KEY `idx_improve_measure_suggestion` (`suggestion_id`),
-  CONSTRAINT `fk_improve_measure_suggestion` FOREIGN KEY (`suggestion_id`) REFERENCES `intelligent_suggestion` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_improve_measure_course` FOREIGN KEY (`course_id`) REFERENCES `base_course` (`id`),
-  CONSTRAINT `fk_improve_measure_objective` FOREIGN KEY (`objective_id`) REFERENCES `teach_objective` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_improve_measure_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `sys_user` (`id`),
-  CONSTRAINT `fk_improve_measure_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='改进措施表';
-
 INSERT INTO `sys_role` (`id`, `role_name`, `role_code`, `description`) VALUES
-  (1, '系统管理员', 'ADMIN', '负责系统配置、规则维护与全局数据管理'),
-  (2, '教学管理人员', 'MANAGER', '负责学院级数据查看、规则触发与质量监控'),
-  (3, '任课教师', 'TEACHER', '负责课程目标管理、数据采集与改进闭环'),
-  (4, '教学督导', 'SUPERVISOR', '负责督导评价录入与查看');
+  (1, '超级管理员', 'ADMIN', '拥有系统最高权限，可管理教师账号和全局数据'),
+  (2, '任课教师', 'TEACHER', '负责课程目标管理、数据采集与改进闭环');
 
 INSERT INTO `base_college` (`id`, `college_name`, `college_code`) VALUES
   (1, '计算机科学与工程学院', 'CSE'),
@@ -796,20 +687,16 @@ INSERT INTO `base_semester` (`id`, `semester_code`, `semester_name`, `school_yea
   (3, '2025-2026-1', '2025-2026学年第一学期', '2025-2026', 1, 1);
 
 INSERT INTO `sys_user` (`id`, `username`, `password_hash`, `real_name`, `email`, `phone`, `college_id`, `status`, `last_login_at`) VALUES
-  (1001, 'admin.li', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '李明', 'admin.li@cqust.edu.cn', '13800001001', 1, 1, '2026-04-23 08:20:00'),
-  (1101, 'manager.zhou', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '周海涛', 'manager.zhou@cqust.edu.cn', '13800001101', 1, 1, '2026-04-22 16:45:00'),
+  (1000, 'admin', '$2a$10$zeMmMS8JizGYIZGbBq6nPuCjbE1O5oJJawLH6Dbtk2YKpD3f9hwti', '超级管理员', 'admin@coa.local', '', NULL, 1, NULL),
   (1201, 'wangbin', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '王斌', 'wangbin@cqust.edu.cn', '13800001201', 1, 1, '2026-04-23 09:12:00'),
   (1202, 'liuqing', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '刘庆', 'liuqing@cqust.edu.cn', '13800001202', 1, 1, '2026-04-23 08:55:00'),
-  (1203, 'chenyu', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '陈宇', 'chenyu@cqust.edu.cn', '13800001203', 2, 1, '2026-04-21 14:18:00'),
-  (1301, 'supervisor.zhao', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '赵敏', 'supervisor.zhao@cqust.edu.cn', '13800001301', 1, 1, '2026-04-20 10:30:00');
+  (1203, 'chenyu', '$2b$10$zRshjBF/lJLkkx3K8Mwqj.tLMOv5YqhkwPd08YUAOI95eZkOTCgaa', '陈宇', 'chenyu@cqust.edu.cn', '13800001203', 2, 1, '2026-04-21 14:18:00');
 
 INSERT INTO `sys_user_role` (`user_id`, `role_id`) VALUES
-  (1001, 1),
-  (1101, 2),
-  (1201, 3),
-  (1202, 3),
-  (1203, 3),
-  (1301, 4);
+  (1000, 1),
+  (1201, 2),
+  (1202, 2),
+  (1203, 2);
 
 INSERT INTO `base_course` (`id`, `course_code`, `course_name`, `credits`, `hours`, `course_type`, `college_id`, `major_id`, `status`) VALUES
   (2001, 'CS21001', '数据结构', 4.0, 64, '理论', 1, 1, 1),
@@ -842,14 +729,6 @@ INSERT INTO `calc_rule` (`id`, `rule_name`, `calc_method`, `threshold_value`, `p
 
 INSERT INTO `suggestion_rule` (`id`, `rule_code`, `rule_name`, `rule_type`, `trigger_condition_json`, `suggestion_template`, `priority`, `is_enabled`, `sort_order`, `description`) VALUES
   (1, 'R01', '目标未达成', 'OBJECTIVE', JSON_OBJECT('metric', 'objective_achieve_value', 'operator', 'lt', 'valueSource', 'calc_rule.threshold_value'), '目标达成度低于阈值，建议针对薄弱知识点增加课堂练习与课后巩固。', 1, 1, 1, '目标达成度低于阈值时触发'),
-  (2, 'R02', '期末成绩明显下滑', 'ASSESSMENT', JSON_OBJECT('metric', 'final_exam_avg', 'operator', 'lt_hist_avg_by', 'value', 10), '期末成绩相较历史平均下降明显，建议复核试题难度与复习支持方案。', 1, 1, 2, '期末成绩相对历史平均下滑时触发'),
-  (3, 'R03', '不及格率偏高', 'ASSESSMENT', JSON_OBJECT('metric', 'fail_rate', 'operator', 'gt', 'value', 0.35), '不及格率偏高，建议诊断薄弱环节并安排针对性辅导。', 2, 1, 3, '不及格率超阈值时触发'),
-  (4, 'R07', '教学效果良好', 'POSITIVE', JSON_OBJECT('metric', 'overall_achievement', 'operator', 'gte', 'value', 0.85), '课程整体达成良好，建议总结优秀做法并在同类课程中推广。', 3, 1, 4, '课程整体达成度较高时触发');
-
-INSERT INTO `improve_suggestion` (`id`, `achieve_range_min`, `achieve_range_max`, `suggestion_content`, `category`, `priority`, `status`) VALUES
-  (1, 0.0000, 0.5999, '建议围绕未达成目标增加专题讲练、案例讲解和分层作业。', '目标改进', 1, 1),
-  (2, 0.6000, 0.6999, '目标已达到基本达成标准，建议针对边缘目标进行小范围优化。', '达成巩固', 2, 1),
-  (3, 0.7000, 0.8499, '目标达成情况良好，建议保持当前教学策略并持续跟踪。', '持续优化', 3, 1),
-  (4, 0.8500, 1.0000, '建议总结优秀教学经验并进行课程组共享。', '经验推广', 4, 1);
+  (2, 'R07', '教学效果良好', 'POSITIVE', JSON_OBJECT('metric', 'overall_achievement', 'operator', 'gte', 'value', 0.85), '课程整体达成良好，建议总结优秀做法并在同类课程中推广。', 3, 1, 2, '课程整体达成度较高时触发');
 
 SET FOREIGN_KEY_CHECKS = 1;

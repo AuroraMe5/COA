@@ -12,6 +12,8 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import com.example.coa.common.ApiException;
+
 @Service
 public class SessionService {
 
@@ -66,7 +68,7 @@ public class SessionService {
             LIMIT 1
             """, new MapSqlParameterSource("token", token), rs -> rs.next() ? rs.getLong("user_id") : null);
 
-        return userId == null ? null : coaService.getUserById(userId);
+        return resolveActiveUser(userId);
     }
 
     public AuthenticatedUser resolveRefreshToken(String token) {
@@ -80,7 +82,7 @@ public class SessionService {
             LIMIT 1
             """, new MapSqlParameterSource("token", token), rs -> rs.next() ? rs.getLong("user_id") : null);
 
-        return userId == null ? null : coaService.getUserById(userId);
+        return resolveActiveUser(userId);
     }
 
     public void revoke(String accessToken) {
@@ -90,5 +92,17 @@ public class SessionService {
             WHERE access_token = :accessToken
               AND revoked_at IS NULL
             """, new MapSqlParameterSource("accessToken", accessToken));
+    }
+
+    private AuthenticatedUser resolveActiveUser(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        try {
+            AuthenticatedUser user = coaService.getUserById(userId);
+            return Integer.valueOf(1).equals(user.status()) ? user : null;
+        } catch (ApiException error) {
+            return null;
+        }
     }
 }

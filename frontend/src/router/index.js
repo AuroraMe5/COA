@@ -13,6 +13,8 @@ import ClassCollectView from '@/views/collect/ClassCollectView.vue'
 import GradeManageView from '@/views/collect/GradeManageView.vue'
 import AchievementCalculation from '@/views/analysis/AchievementCalculation.vue'
 import AchievementReportView from '@/views/analysis/AchievementReportView.vue'
+import CatalogManageView from '@/views/admin/CatalogManageView.vue'
+import UserManageView from '@/views/admin/UserManageView.vue'
 
 // meta.title 目前主要用于路由语义和后续扩展。
 // 头部组件已经不再直接把它渲染成大标题，因此不会再出现“左上角重复标题”的问题。
@@ -91,7 +93,7 @@ const routes = [
       },
       {
         path: 'collect/grades',
-        name: 'grade-import',
+        name: 'grade-manage-redirect',
         redirect: '/collect/grades/manage'
       },
       {
@@ -115,6 +117,18 @@ const routes = [
         name: 'analysis-report',
         component: AchievementReportView,
         meta: { title: '报告预览和导出' }
+      },
+      {
+        path: 'admin/users',
+        name: 'admin-users',
+        component: UserManageView,
+        meta: { title: '用户管理', requiresRole: 'ADMIN' }
+      },
+      {
+        path: 'admin/catalogs',
+        name: 'admin-catalogs',
+        component: CatalogManageView,
+        meta: { title: '基础信息管理', requiresRole: 'ADMIN' }
       }
     ]
   },
@@ -149,6 +163,10 @@ router.beforeEach(async (to) => {
       name: 'login',
       query: { redirect: to.fullPath }
     }
+  }
+
+  if (to.meta.requiresRole && !authStore.hasRole(to.meta.requiresRole)) {
+    return { name: 'dashboard' }
   }
 
   if (to.meta.guestOnly && authStore.isAuthenticated) {

@@ -2,6 +2,15 @@
   <div class="app-page page-stack">
     <ModuleHeader title="课程管理">
       <template #actions>
+        <button class="btn btn-primary" @click="openCreateCourseDialog">新增课程</button>
+        <button
+          class="btn btn-danger"
+          :disabled="!canDeleteSelectedCourse || deletingCourse"
+          :title="canDeleteSelectedCourse ? '' : '只能删除自己创建的课程'"
+          @click="deleteCurrentCourse"
+        >
+          {{ deletingCourse ? '删除中...' : '删除当前课程' }}
+        </button>
         <button class="btn btn-light" @click="goTo('/objectives/parse-import')">智能解析导入</button>
       </template>
     </ModuleHeader>
@@ -10,6 +19,7 @@
       <div class="filter-field">
         <label>课程</label>
         <select v-model="filters.courseId" class="select-input" @change="loadCourseDetail">
+          <option v-if="!catalogs.courses.length" value="">暂无课程</option>
           <option v-for="course in catalogs.courses" :key="course.id" :value="course.id">
             {{ course.name }}（{{ course.code }}）
           </option>
@@ -290,6 +300,47 @@
       />
     </PanelCard>
 
+    <div v-if="courseCreateDialog.open" class="modal-backdrop" @click.self="closeCreateCourseDialog">
+      <section class="modal-panel create-course-panel" role="dialog" aria-modal="true" aria-labelledby="create-course-title">
+        <header class="modal-head">
+          <div>
+            <h2 id="create-course-title">新增课程</h2>
+            <p>新增后会自动选中课程，后续信息可在当前页面继续维护。</p>
+          </div>
+          <button class="btn btn-light" type="button" @click="closeCreateCourseDialog">关闭</button>
+        </header>
+        <div class="modal-body create-course-body">
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label>学期</label>
+              <select v-model="newCourseForm.semester" class="select-input">
+                <option v-for="semester in catalogs.semesters" :key="semester" :value="semester">
+                  {{ semester }}
+                </option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>课程编号</label>
+              <input v-model.trim="newCourseForm.courseCode" class="text-input" autocomplete="off" />
+            </div>
+            <div class="form-field">
+              <label>课程名称</label>
+              <input v-model.trim="newCourseForm.courseName" class="text-input" autocomplete="off" />
+            </div>
+          </div>
+          <div class="modal-footer-actions">
+            <span class="muted">只需要填写基础标识信息，其余字段在选中课程后编辑。</span>
+            <div class="actions-inline">
+              <button class="btn btn-light" type="button" @click="closeCreateCourseDialog">取消</button>
+              <button class="btn btn-primary" type="button" :disabled="creatingCourse" @click="submitCreateCourse">
+                {{ creatingCourse ? '新增中...' : '确认新增' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div v-if="objectiveDialog.open" class="modal-backdrop" @click.self="closeObjectiveDialog">
       <section class="modal-panel" role="dialog" aria-modal="true" :aria-label="objectiveDialogTitle">
         <header class="modal-head">
@@ -516,6 +567,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  createCourse,
+  deleteCourse,
   getCourseDetail,
   getReferenceCatalogs,
   saveOutline,
@@ -526,13 +579,15 @@ import {
 import EmptyState from '@/components/common/EmptyState.vue'
 import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
+import { useAuthStore } from '@/stores/auth'
 import ObjectiveList from '@/views/objectives/ObjectiveList.vue'
 import ObjectiveMapping from '@/views/objectives/ObjectiveMapping.vue'
 import ObjectiveWeights from '@/views/objectives/ObjectiveWeights.vue'
-import { showFeedback } from '@/utils/feedback'
+import { confirmFeedback, showFeedback } from '@/utils/feedback'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
 const catalogs = reactive({
   courses: [],
@@ -559,6 +614,8 @@ const courseForm = reactive(blankCourse())
 const outlineForm = reactive(blankOutline())
 const savingCourse = ref(false)
 const savingOutline = ref(false)
+const creatingCourse = ref(false)
+const deletingCourse = ref(false)
 const savingTeachingContents = ref(false)
 const savingAssessItems = ref(false)
 const teachingVisibleLimit = ref(10)
@@ -579,6 +636,14 @@ const teachingDialog = reactive({
 })
 const assessDialog = reactive({
   open: false
+})
+const courseCreateDialog = reactive({
+  open: false
+})
+const newCourseForm = reactive({
+  semester: '',
+  courseCode: '',
+  courseName: ''
 })
 
 const defaultTeachingMethods = ['讲授', '上机', '实验', '实践', '讨论', '案例教学', '项目教学', '线上', '线下', '混合式']
@@ -627,9 +692,14 @@ const assessWeightTotal = computed(() =>
 )
 const teacherText = computed(() => detail.teacherNames.length ? detail.teacherNames.join('、') : '未配置')
 const objectiveMap = computed(() => new Map(detail.objectives.map((item) => [Number(item.id), item])))
-const selectedCourseText = computed(() => {
-  const course = catalogs.courses.find((item) => String(item.id) === String(filters.courseId))
-  return course ? `${course.name}（${course.code}）` : '当前课程'
+const selectedCourse = computed(() => catalogs.courses.find((item) => String(item.id) === String(filters.courseId)))
+const selectedCourseText = computed(() => selectedCourse.value ? `${selectedCourse.value.name}（${selectedCourse.value.code}）` : '当前课程')
+const canDeleteSelectedCourse = computed(() => {
+  if (!filters.courseId) return false
+  if (authStore.isAdmin) return true
+  const createdBy = Number(selectedCourse.value?.createdBy || detail.course.createdBy || 0)
+  const currentUserId = Number(authStore.userInfo?.id || 0)
+  return Boolean(createdBy && currentUserId && createdBy === currentUserId)
 })
 const objectiveDialogTitle = computed(() => {
   const map = {
@@ -763,6 +833,90 @@ function applyDetail(payload) {
   applyOutline(detail.outline)
 }
 
+function resetCoursePageState() {
+  const currentSemester = filters.semester || catalogs.semesters[0] || ''
+  filters.courseId = ''
+  filters.semester = currentSemester
+  detail.course = {}
+  detail.outline = {}
+  detail.objectives = []
+  detail.assessItems = []
+  detail.mappingRows = []
+  detail.teacherNames = []
+  detail.latestParsedCourse = { teachingContents: [] }
+  detail.summary = {}
+  assessItemDrafts.value = []
+  teachingMethodFilter.value = ''
+  applyCourse()
+  applyOutline()
+  resetTeachingScroll()
+  changePreviewTeachingPage(1)
+}
+
+function openCreateCourseDialog() {
+  newCourseForm.semester = filters.semester || catalogs.semesters[0] || ''
+  newCourseForm.courseCode = ''
+  newCourseForm.courseName = ''
+  courseCreateDialog.open = true
+}
+
+function closeCreateCourseDialog() {
+  if (!creatingCourse.value) {
+    courseCreateDialog.open = false
+  }
+}
+
+async function submitCreateCourse() {
+  if (!newCourseForm.semester || !newCourseForm.courseCode || !newCourseForm.courseName) {
+    setMessage('error', '请选择学期并填写课程编号和课程名称。')
+    return
+  }
+
+  creatingCourse.value = true
+  try {
+    const data = await createCourse({
+      semester: newCourseForm.semester,
+      courseCode: newCourseForm.courseCode,
+      courseName: newCourseForm.courseName
+    })
+    applyDetail(data)
+    courseCreateDialog.open = false
+    setMessage('success', '课程已新增，可继续编辑课程基础信息。')
+  } catch (error) {
+    setMessage('error', error.message || '新增课程失败。')
+  } finally {
+    creatingCourse.value = false
+  }
+}
+
+async function deleteCurrentCourse() {
+  if (!filters.courseId) return
+  const confirmed = await confirmFeedback(`删除课程“${selectedCourseText.value}”？`, {
+    type: 'warning',
+    confirmText: '删除'
+  })
+  if (!confirmed) return
+
+  deletingCourse.value = true
+  try {
+    const result = await deleteCourse(filters.courseId, { semester: filters.semester })
+    catalogs.courses = result.courses || catalogs.courses.filter((item) => String(item.id) !== String(filters.courseId))
+    catalogs.semesters = result.semesters || catalogs.semesters
+    const nextCourse = catalogs.courses[0]
+    if (nextCourse) {
+      filters.courseId = nextCourse.id
+      await loadCourseDetail()
+    } else {
+      resetCoursePageState()
+    }
+    setMessage('success', '课程已删除。')
+  } catch (error) {
+    setMessage('error', error.message || '删除课程失败。')
+  } finally {
+    deletingCourse.value = false
+  }
+}
+
 async function loadCatalogs() {
   const data = await getReferenceCatalogs()
   catalogs.courses = data.courses || []
@@ -771,11 +925,16 @@ async function loadCatalogs() {
   filters.semester = route.query.semester || catalogs.semesters[0] || ''
   if (filters.courseId) {
     await loadCourseDetail()
+  } else {
+    resetCoursePageState()
   }
 }
 
 async function loadCourseDetail() {
-  if (!filters.courseId) return
+  if (!filters.courseId) {
+    resetCoursePageState()
+    return
+  }
   try {
     const data = await getCourseDetail(filters.courseId, { semester: filters.semester })
     applyDetail(data)
@@ -1276,6 +1435,15 @@ onBeforeUnmount(clearMessageTimer)
 .assess-modal-body {
   display: grid;
   gap: 16px;
+}
+
+.create-course-panel {
+  width: min(720px, 96vw);
+}
+
+.create-course-body {
+  display: grid;
+  gap: 18px;
 }
 
 .assess-edit-table {
