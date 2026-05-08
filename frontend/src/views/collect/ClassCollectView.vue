@@ -32,10 +32,19 @@
           </div>
           <div class="form-field">
             <label>学院</label>
-            <select v-model="classForm.majorId" class="select-input">
-              <option value="">未设置</option>
-              <option v-for="major in catalogs.majors" :key="major.id" :value="major.id">
-                {{ major.collegeName || major.name }}
+            <select v-model="classForm.collegeId" class="select-input">
+              <option value="">请选择学院</option>
+              <option v-for="college in catalogs.colleges" :key="college.id" :value="college.id">
+                {{ college.name }}（{{ college.code }}）
+              </option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>专业</label>
+            <select v-model="classForm.majorId" class="select-input" :disabled="!classForm.collegeId">
+              <option value="">{{ classForm.collegeId ? '请选择专业' : '请先选择学院' }}</option>
+              <option v-for="major in filteredClassMajors" :key="major.id" :value="major.id">
+                {{ major.name }}（{{ major.code }}）
               </option>
             </select>
           </div>
@@ -57,6 +66,7 @@
               <tr>
                 <th>班级</th>
                 <th>学院</th>
+                <th>专业</th>
                 <th>年级</th>
                 <th>学生</th>
                 <th>操作</th>
@@ -68,7 +78,8 @@
                   <strong>{{ item.className }}</strong>
                   <div class="cell-note">{{ item.classCode }}</div>
                 </td>
-                <td>{{ item.collegeName || item.majorName || '—' }}</td>
+                <td>{{ item.collegeName || '—' }}</td>
+                <td>{{ item.majorName || '—' }}</td>
                 <td>{{ item.gradeYear || '—' }}</td>
                 <td>{{ item.studentCount || 0 }}</td>
                 <td class="nowrap">
@@ -248,7 +259,7 @@ import ModuleHeader from '@/components/common/ModuleHeader.vue'
 import PanelCard from '@/components/common/PanelCard.vue'
 import { confirmFeedback, showFeedback } from '@/utils/feedback'
 
-const catalogs = reactive({ courses: [], semesters: [], majors: [] })
+const catalogs = reactive({ courses: [], semesters: [], colleges: [], majors: [] })
 const classes = ref([])
 const students = ref([])
 const classCourses = ref([])
@@ -265,14 +276,30 @@ const classForm = reactive(blankClass())
 const courseForm = reactive({ classId: '', semester: '', courseId: '' })
 
 const selectedClass = computed(() => classes.value.find((item) => String(item.id) === String(selectedClassId.value)))
+const filteredClassMajors = computed(() => {
+  const collegeId = String(classForm.collegeId || '')
+  if (!collegeId) return []
+  return catalogs.majors.filter((major) => String(major.collegeId || '') === collegeId)
+})
 
 watch(selectedClassId, async (value) => {
   courseForm.classId = value
   await Promise.all([loadStudents(), loadClassCourses()])
 })
 
+watch(() => classForm.collegeId, (value) => {
+  if (!value) {
+    classForm.majorId = ''
+    return
+  }
+  const currentMajor = findMajor(classForm.majorId)
+  if (!currentMajor || String(currentMajor.collegeId || '') !== String(value)) {
+    classForm.majorId = ''
+  }
+})
+
 function blankClass() {
-  return { id: null, classCode: '', className: '', majorId: '', gradeYear: '' }
+  return { id: null, classCode: '', className: '', collegeId: '', majorId: '', gradeYear: '' }
 }
 
 function setMessage(type, text) {
@@ -285,11 +312,18 @@ function resetClassForm() {
   Object.assign(classForm, blankClass())
 }
 
+function findMajor(majorId) {
+  if (!majorId) return null
+  return catalogs.majors.find((major) => String(major.id) === String(majorId)) || null
+}
+
 function editClass(item) {
+  const major = findMajor(item.majorId)
   Object.assign(classForm, {
     id: item.id,
     classCode: item.classCode,
     className: item.className,
+    collegeId: item.collegeId || major?.collegeId || '',
     majorId: item.majorId || '',
     gradeYear: item.gradeYear || ''
   })
@@ -301,6 +335,14 @@ function selectClass(item) {
 }
 
 async function submitClass() {
+  if (!classForm.collegeId) {
+    setMessage('error', '请选择学院。')
+    return
+  }
+  if (!classForm.majorId) {
+    setMessage('error', '请选择专业。')
+    return
+  }
   savingClass.value = true
   try {
     const result = await saveClass({ ...classForm })
@@ -328,7 +370,10 @@ async function handleStudentUpload() {
   try {
     const result = await uploadStudents(selectedClassId.value, { file: selectedStudentFile.value })
     students.value = result.students || []
-    setMessage('success', `学生导入完成：写入 ${result.importedCount || 0} 人，跳过 ${result.skippedCount || 0} 行。`)
+    const errors = result.errors || []
+    const detail = errors.length ? ` ${errors.slice(0, 3).join('；')}` : ''
+    const type = Number(result.skippedCount || 0) > 0 ? 'warning' : 'success'
+    setMessage(type, `学生导入完成：写入 ${result.importedCount || 0} 人，跳过 ${result.skippedCount || 0} 行。${detail}`)
     await loadClasses()
   } catch (error) {
     setMessage('error', error.message || '学生导入失败。')
@@ -455,6 +500,7 @@ async function loadCatalogs() {
   const data = await getReferenceCatalogs()
   catalogs.courses = data.courses || []
   catalogs.semesters = data.semesters || []
+  catalogs.colleges = data.colleges || []
   catalogs.majors = data.majors || []
   courseForm.semester = catalogs.semesters[0] || ''
   courseForm.courseId = catalogs.courses[0]?.id || ''

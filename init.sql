@@ -7,7 +7,7 @@ CREATE DATABASE IF NOT EXISTS `coa`
 
 USE `coa`;
 
--- 清理旧版本残留表以及当前表，保证初始化脚本可重复执行。
+-- 按依赖顺序清理并重建当前初始化涉及的表，保证脚本可重复执行。
 DROP TABLE IF EXISTS `improve_measure`;
 DROP TABLE IF EXISTS `intelligent_suggestion`;
 DROP TABLE IF EXISTS `suggestion_rule`;
@@ -191,7 +191,7 @@ CREATE TABLE `base_class` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '班级ID',
   `class_code` VARCHAR(50) NOT NULL COMMENT '班级编码',
   `class_name` VARCHAR(100) NOT NULL COMMENT '班级名称',
-  `major_id` BIGINT DEFAULT NULL COMMENT '所属专业ID',
+  `major_id` BIGINT DEFAULT NULL COMMENT '所属专业ID，班级通过专业归属学院',
   `grade_year` VARCHAR(20) DEFAULT NULL COMMENT '年级',
   `student_count` INT NOT NULL DEFAULT 0 COMMENT '学生人数',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
@@ -209,7 +209,7 @@ CREATE TABLE `base_student` (
   `student_name` VARCHAR(50) NOT NULL COMMENT '姓名',
   `gender` VARCHAR(10) DEFAULT NULL COMMENT '性别',
   `class_id` BIGINT DEFAULT NULL COMMENT '班级ID',
-  `major_id` BIGINT DEFAULT NULL COMMENT '专业ID',
+  `major_id` BIGINT DEFAULT NULL COMMENT '专业ID，通常继承班级专业',
   `phone` VARCHAR(20) DEFAULT NULL COMMENT '手机号',
   `email` VARCHAR(100) DEFAULT NULL COMMENT '邮箱',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1在读 0停用',
@@ -397,8 +397,8 @@ CREATE TABLE `parse_task` (
   `obj_extract_count` INT NOT NULL DEFAULT 0 COMMENT '提取目标数量',
   `assess_extract_count` INT NOT NULL DEFAULT 0 COMMENT '提取考核项数量',
   `overwrite_mode` TINYINT NOT NULL DEFAULT 0 COMMENT '0追加 1覆盖',
-  `error_code` VARCHAR(20) DEFAULT NULL COMMENT '错误码',
-  `error_message` VARCHAR(500) DEFAULT NULL COMMENT '错误信息',
+  `error_code` VARCHAR(20) DEFAULT NULL COMMENT '解析失败码',
+  `error_message` VARCHAR(500) DEFAULT NULL COMMENT '解析失败说明',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `finished_at` DATETIME DEFAULT NULL COMMENT '完成时间',
@@ -496,25 +496,25 @@ CREATE TABLE `grade_import_batch` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成绩导入批次表';
 
 CREATE TABLE `grade_import_preview` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT 'preview row id',
-  `course_id` BIGINT NOT NULL COMMENT 'course id',
-  `class_id` BIGINT DEFAULT NULL COMMENT 'class id',
-  `student_id` BIGINT DEFAULT NULL COMMENT 'student id',
-  `assess_item_id` BIGINT NOT NULL COMMENT 'assessment item id',
-  `assess_content_id` BIGINT DEFAULT NULL COMMENT 'assessment content id',
-  `semester_id` BIGINT NOT NULL COMMENT 'semester id',
-  `import_batch_id` BIGINT NOT NULL COMMENT 'import batch id',
-  `student_no` VARCHAR(20) NOT NULL COMMENT 'student no',
-  `student_name` VARCHAR(50) NOT NULL COMMENT 'student name',
-  `raw_score` DECIMAL(6,2) DEFAULT NULL COMMENT 'raw score',
-  `raw_max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT 'raw max score',
-  `score` DECIMAL(6,2) NOT NULL COMMENT 'converted score',
-  `max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT 'converted max score',
-  `valid_flag` TINYINT NOT NULL DEFAULT 1 COMMENT '1 valid 0 invalid',
-  `error_message` VARCHAR(255) DEFAULT NULL COMMENT 'error message',
-  `created_by` BIGINT DEFAULT NULL COMMENT 'created by',
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'created time',
-  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'updated time',
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '成绩导入预览行ID',
+  `course_id` BIGINT NOT NULL COMMENT '课程ID',
+  `class_id` BIGINT DEFAULT NULL COMMENT '班级ID',
+  `student_id` BIGINT DEFAULT NULL COMMENT '学生ID',
+  `assess_item_id` BIGINT NOT NULL COMMENT '考核项ID',
+  `assess_content_id` BIGINT DEFAULT NULL COMMENT '考核内容ID',
+  `semester_id` BIGINT NOT NULL COMMENT '学期ID',
+  `import_batch_id` BIGINT NOT NULL COMMENT '导入批次ID',
+  `student_no` VARCHAR(30) NOT NULL COMMENT '学号',
+  `student_name` VARCHAR(50) NOT NULL COMMENT '学生姓名',
+  `raw_score` DECIMAL(6,2) DEFAULT NULL COMMENT '原始成绩',
+  `raw_max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT '原始满分值',
+  `score` DECIMAL(6,2) NOT NULL COMMENT '折算得分',
+  `max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT '折算满分值',
+  `valid_flag` TINYINT NOT NULL DEFAULT 1 COMMENT '1有效 0无效',
+  `error_message` VARCHAR(255) DEFAULT NULL COMMENT '校验说明',
+  `created_by` BIGINT DEFAULT NULL COMMENT '创建人ID',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   KEY `idx_grade_preview_batch` (`import_batch_id`),
   KEY `idx_grade_preview_scope` (`course_id`, `semester_id`, `assess_item_id`),
@@ -528,7 +528,7 @@ CREATE TABLE `grade_import_preview` (
   CONSTRAINT `fk_grade_preview_semester` FOREIGN KEY (`semester_id`) REFERENCES `base_semester` (`id`),
   CONSTRAINT `fk_grade_preview_batch` FOREIGN KEY (`import_batch_id`) REFERENCES `grade_import_batch` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_grade_preview_creator` FOREIGN KEY (`created_by`) REFERENCES `sys_user` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='grade import preview buffer';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成绩导入预览表';
 
 CREATE TABLE `student_grade` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '成绩记录ID',
@@ -539,14 +539,14 @@ CREATE TABLE `student_grade` (
   `assess_content_id` BIGINT DEFAULT NULL COMMENT '考核内容ID，NULL表示考核项汇总成绩',
   `semester_id` BIGINT NOT NULL COMMENT '学期ID',
   `import_batch_id` BIGINT DEFAULT NULL COMMENT '导入批次ID',
-  `student_no` VARCHAR(20) NOT NULL COMMENT '学号',
+  `student_no` VARCHAR(30) NOT NULL COMMENT '学号',
   `student_name` VARCHAR(50) DEFAULT NULL COMMENT '学生姓名',
   `raw_score` DECIMAL(6,2) DEFAULT NULL COMMENT '原始成绩',
   `raw_max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT '原始满分值',
   `score` DECIMAL(6,2) DEFAULT NULL COMMENT '折算得分',
   `max_score` DECIMAL(6,2) NOT NULL DEFAULT 100.00 COMMENT '折算满分值',
   `valid_flag` TINYINT NOT NULL DEFAULT 1 COMMENT '1有效 0无效',
-  `error_message` VARCHAR(255) DEFAULT NULL COMMENT '异常说明',
+  `error_message` VARCHAR(255) DEFAULT NULL COMMENT '校验说明',
   `created_by` BIGINT DEFAULT NULL COMMENT '导入人ID',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',

@@ -1,6 +1,6 @@
 # COA 教学目标达成系统
 
-本项目是一个面向高校课程教学目标达成度管理的 Web 系统，覆盖课程大纲维护、智能解析导入、班级与学生数据采集、成绩导入与维护、达成度核算、报告预览与 Word 导出，以及超级管理员的教师账号管理。
+COA 是面向高校课程教学目标达成度管理的 Web 系统，覆盖课程基础信息、课程大纲、智能解析导入、教学目标与考核映射、班级与学生数据采集、成绩导入与维护、达成度核算、报告预览与 Word 导出，以及管理员的教师账号和基础目录管理。
 
 ## 技术栈
 
@@ -44,7 +44,7 @@ COA/
 │       ├── router/
 │       ├── stores/
 │       └── views/
-├── init.sql                      当前数据库初始化脚本
+├── init.sql                      数据库初始化脚本
 └── README.md
 ```
 
@@ -52,11 +52,13 @@ COA/
 
 ### 1. 初始化数据库
 
+在 MySQL 客户端执行：
+
 ```sql
 SOURCE D:/COA/init.sql;
 ```
 
-`init.sql` 会创建 `coa` 数据库并写入必要演示数据。脚本可重复执行，会先清理旧表再重建当前结构。
+`init.sql` 会创建 `coa` 数据库、按依赖顺序重建当前业务表，并写入基础演示数据。脚本可重复执行。
 
 默认账号：
 
@@ -80,7 +82,7 @@ cd backend/coa
 http://localhost:8081
 ```
 
-数据库配置位于：
+数据库连接配置位于：
 
 ```text
 backend/coa/src/main/resources/application.properties
@@ -108,40 +110,54 @@ npm run serve
 http://localhost:8080
 ```
 
-开发环境 `/api` 请求由 `frontend/vue.config.js` 代理到 `http://localhost:8081`。
+开发环境中，`frontend/vue.config.js` 会把 `/api` 请求代理到 `http://localhost:8081`。
 
 ## 当前功能
 
 ### 账号与权限
 
-- 登录、退出、当前用户查询。
+- 登录、退出、刷新 token、当前用户查询。
 - 会话使用 Bearer Token。
 - 禁用账号无法登录，已有 token 也会失效。
-- 超级管理员拥有教师页面同等访问能力，并额外拥有用户管理入口。
-- 用户管理支持新增教师、删除教师、重置教师密码、禁用/启用教师账号。
+- 超级管理员拥有教师页面同等访问能力，并额外拥有用户管理和基础信息管理入口。
+- 管理员可新增教师、删除教师、重置教师密码、禁用或启用教师账号。
+
+### 基础信息
+
+- 管理学院、专业、学期。
+- 专业归属于学院。
+- 班级归属于专业，并通过专业关联到学院。
+- 创建或编辑班级时，需先选择学院，再选择该学院下的专业。
 
 ### 课程与目标
 
-- 教师可直接新增课程，也可删除自己创建并在所选学期负责的课程。
-- 课程详情维护。
-- 教学内容维护。
+- 教师可新增课程，也可删除自己创建并在所选学期负责的课程。
+- 课程详情、教学内容、考核项维护。
 - 课程大纲创建、编辑、发布。
 - 教学目标增删改、目标分解点维护、目标权重维护。
-- 考核项维护。
 - 目标与考核项映射维护。
 
 ### 智能解析导入
 
-- 支持上传 doc、docx、pdf。
+- 支持上传 `doc`、`docx`、`pdf`。
 - 解析课程信息、教学目标、考核项、教学内容和目标考核映射。
 - 解析结果先进入草稿复核区，教师确认后写入正式业务表。
 
 ### 数据采集
 
-- 班级创建和编辑。
+- 班级创建和编辑，学院与专业级联选择。
 - 学生信息导入、新增、编辑、删除。
+- 学生导入支持 `xls`、`xlsx`、`csv`。
+- 学生导入标准表头支持：
+
+```text
+序号 | 班级 | 学号 | 姓名 | 期末成绩(必填) | 备注
+```
+
+- 学生导入也兼容包含“学号/学籍号/学生编号”和“姓名/学生姓名”的常见表头。
+- 导入时会自动按当前选中班级写入学生，并继承该班级所属专业。
 - 班级课程绑定。
-- 成绩文件上传，支持 xls、xlsx、csv。
+- 成绩文件上传，支持 `xls`、`xlsx`、`csv`。
 - 成绩导入预览、异常行修正、确认导入。
 - 学生成绩横向表查询、新增、编辑、删除。
 - 考核内容及方式表维护。
@@ -170,6 +186,7 @@ http://localhost:8080
 /analysis/calculation          达成度核算
 /analysis/report               报告预览和导出
 /admin/users                   用户管理，仅 ADMIN 可访问
+/admin/catalogs                基础信息管理，仅 ADMIN 可访问
 ```
 
 ## 后端接口
@@ -191,21 +208,36 @@ POST   /api/v1/admin/teachers
 PATCH  /api/v1/admin/teachers/{id}/password
 PATCH  /api/v1/admin/teachers/{id}/status
 DELETE /api/v1/admin/teachers/{id}
+
+GET    /api/v1/admin/colleges
+POST   /api/v1/admin/colleges
+PUT    /api/v1/admin/colleges/{id}
+DELETE /api/v1/admin/colleges/{id}
+
+GET    /api/v1/admin/majors
+POST   /api/v1/admin/majors
+PUT    /api/v1/admin/majors/{id}
+DELETE /api/v1/admin/majors/{id}
+
+GET    /api/v1/admin/semesters
+POST   /api/v1/admin/semesters
+PUT    /api/v1/admin/semesters/{id}
+DELETE /api/v1/admin/semesters/{id}
 ```
 
 ### 目录与课程
 
 ```text
-GET /api/v1/reference/catalogs
-GET /api/v1/courses
-POST /api/v1/courses
-GET /api/v1/courses/{id}
-PUT /api/v1/courses/{id}
+GET    /api/v1/reference/catalogs
+GET    /api/v1/courses
+POST   /api/v1/courses
+GET    /api/v1/courses/{id}
+PUT    /api/v1/courses/{id}
 DELETE /api/v1/courses/{id}
-PUT /api/v1/courses/{id}/teaching-contents
-PUT /api/v1/courses/{id}/assess-items
-GET /api/v1/semesters
-GET /api/v1/assess-items
+PUT    /api/v1/courses/{id}/teaching-contents
+PUT    /api/v1/courses/{id}/assess-items
+GET    /api/v1/semesters
+GET    /api/v1/assess-items
 ```
 
 ### 大纲与目标
@@ -282,19 +314,19 @@ GET  /api/v1/report/preview-meta
 GET  /api/v1/report/download
 ```
 
-## 当前数据库结构
+## 数据库结构
 
-`init.sql` 仅保留当前代码路径实际使用的表：
+`init.sql` 会创建当前页面和接口实际使用的核心表：
 
 ```text
 base_college
 base_major
 base_semester
-base_course
 sys_role
 sys_user
 sys_user_role
 sys_login_session
+base_course
 course_teacher
 base_class
 base_student
@@ -320,18 +352,14 @@ suggestion_rule
 intelligent_suggestion
 ```
 
-已移除的旧结构：
+关键关系：
 
-```text
-student_eval
-student_eval_dimension
-teacher_reflection
-supervisor_eval
-improve_suggestion
-improve_measure
-```
-
-这些结构没有当前 Controller 或前端页面入口，保留会导致文档和数据库结构与实际系统能力不一致。
+- `base_major.college_id` 指向学院。
+- `base_class.major_id` 指向专业，班级所属学院由专业推出。
+- `base_student.class_id` 指向班级，`major_id` 默认继承班级专业。
+- `class_course` 绑定班级、课程、学期和任课教师。
+- `student_grade` 保存确认后的成绩明细。
+- `achieve_result` 和 `achieve_result_detail` 保存达成度核算结果。
 
 ## 构建与校验
 
@@ -339,7 +367,7 @@ improve_measure
 
 ```powershell
 cd backend/coa
-.\mvnw.cmd -q -DskipTests package
+.\mvnw.cmd test
 ```
 
 前端：

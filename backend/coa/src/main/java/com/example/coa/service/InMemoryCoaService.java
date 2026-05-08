@@ -1112,6 +1112,7 @@ public class InMemoryCoaService {
                 bc.class_name,
                 bc.major_id,
                 bm.major_name,
+                c.id AS college_id,
                 c.college_name,
                 bc.grade_year,
                 bc.student_count,
@@ -1141,6 +1142,9 @@ public class InMemoryCoaService {
         }
         if (!StringUtils.hasText(className)) {
             throw new ApiException(UNPROCESSABLE_STATUS, 400, "班级名称不能为空。");
+        }
+        if (majorId != null) {
+            requireActiveMajor(majorId);
         }
         if (id == null) {
             GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
@@ -4210,8 +4214,22 @@ public class InMemoryCoaService {
             "semesters", catalogSemesters(),
             "assessItems", catalogAssessItems(),
             "classes", catalogClasses(),
+            "colleges", catalogColleges(),
             "majors", catalogMajors()
         );
+    }
+
+    private List<Map<String, Object>> catalogColleges() {
+        return plainJdbcTemplate.query("""
+            SELECT id, college_name, college_code
+            FROM base_college
+            WHERE status = 1
+            ORDER BY id ASC
+            """, (rs, rowNum) -> map(
+            "id", rs.getLong("id"),
+            "name", rs.getString("college_name"),
+            "code", rs.getString("college_code")
+        ));
     }
 
     private List<Map<String, Object>> catalogMajors() {
@@ -4220,7 +4238,7 @@ public class InMemoryCoaService {
             FROM base_major m
             LEFT JOIN base_college c ON c.id = m.college_id
             WHERE m.status = 1
-            ORDER BY m.id ASC
+            ORDER BY c.college_name ASC, m.major_name ASC, m.id ASC
             """, (rs, rowNum) -> map(
             "id", rs.getLong("id"),
             "name", rs.getString("major_name"),
@@ -4295,6 +4313,7 @@ public class InMemoryCoaService {
                 bc.class_name,
                 bc.major_id,
                 bm.major_name,
+                c.id AS college_id,
                 c.college_name,
                 bc.grade_year,
                 bc.student_count,
@@ -5946,6 +5965,18 @@ public class InMemoryCoaService {
         return collegeId;
     }
 
+    private void requireActiveMajor(long majorId) {
+        long exists = count("""
+            SELECT COUNT(*)
+            FROM base_major
+            WHERE id = :majorId
+              AND status = 1
+            """, params("majorId", majorId));
+        if (exists == 0) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "所选专业不存在或已停用。");
+        }
+    }
+
     private void requireActiveCourse(long courseId) {
         long exists = count("""
             SELECT COUNT(*)
@@ -6667,6 +6698,7 @@ public class InMemoryCoaService {
             "className", rs.getString("class_name"),
             "majorId", nullableLong(rs.getObject("major_id")),
             "majorName", defaultString(rs.getString("major_name"), ""),
+            "collegeId", nullableLong(rs.getObject("college_id")),
             "collegeName", defaultString(rs.getString("college_name"), ""),
             "gradeYear", defaultString(rs.getString("grade_year"), ""),
             "studentCount", rs.getInt("student_count"),
@@ -6714,11 +6746,14 @@ public class InMemoryCoaService {
                 bc.class_name,
                 bc.major_id,
                 bm.major_name,
+                c.id AS college_id,
+                c.college_name,
                 bc.grade_year,
                 bc.student_count,
                 bc.status
             FROM base_class bc
             LEFT JOIN base_major bm ON bm.id = bc.major_id
+            LEFT JOIN base_college c ON c.id = bm.college_id
             WHERE bc.id = :id
             """, params("id", id), this::classMap);
     }
@@ -7199,25 +7234,24 @@ public class InMemoryCoaService {
             throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件为空，请检查表头和数据行。");
         }
 
-        int headerIndex = findStudentHeaderIndex(rows);
-        List<String> header = rows.get(headerIndex);
-        Map<String, Integer> columns = resolveStudentColumns(header);
+        StudentColumnSelection selection = selectStudentColumns(rows);
+        Map<String, Integer> columns = selection.columns();
         if (!columns.containsKey("studentNo") || !columns.containsKey("studentName")) {
-            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件必须包含学号和姓名列。");
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件必须包含学号和姓名列，或使用“序号、班级、学号、姓名”格式的标准模板。");
         }
 
         List<StudentImportRow> imports = new ArrayList<>();
         List<String> errors = new ArrayList<>();
-        for (int rowIndex = headerIndex + 1; rowIndex < rows.size(); rowIndex++) {
+        for (int rowIndex = selection.dataStartIndex(); rowIndex < rows.size(); rowIndex++) {
             List<String> row = rows.get(rowIndex);
             if (row.stream().allMatch(cell -> !StringUtils.hasText(cell))) {
                 continue;
             }
-            String studentNo = cellAt(row, columns.get("studentNo"));
-            String studentName = cellAt(row, columns.get("studentName"));
-            String gender = columns.containsKey("gender") ? cellAt(row, columns.get("gender")) : "";
-            String phone = columns.containsKey("phone") ? cellAt(row, columns.get("phone")) : "";
-            String email = columns.containsKey("email") ? cellAt(row, columns.get("email")) : "";
+            String studentNo = normalizeStudentNo(cellAt(row, columns.get("studentNo")));
+            String studentName = normalizeStudentText(cellAt(row, columns.get("studentName")));
+            String gender = columns.containsKey("gender") ? normalizeStudentText(cellAt(row, columns.get("gender"))) : "";
+            String phone = columns.containsKey("phone") ? normalizeStudentText(cellAt(row, columns.get("phone"))) : "";
+            String email = columns.containsKey("email") ? normalizeStudentText(cellAt(row, columns.get("email"))) : "";
             String error = "";
             if (!StringUtils.hasText(studentNo)) {
                 error = "学号不能为空";
@@ -7243,6 +7277,13 @@ public class InMemoryCoaService {
         }
 
         int validRows = (int) imports.stream().filter(StudentImportRow::valid).count();
+        if (imports.isEmpty()) {
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件没有可导入的数据行。");
+        }
+        if (validRows == 0) {
+            String detail = errors.stream().limit(3).collect(Collectors.joining("；"));
+            throw new ApiException(UNPROCESSABLE_STATUS, 400, "学生信息文件没有有效数据。" + (StringUtils.hasText(detail) ? detail : ""));
+        }
         return new StudentImportResult(imports, validRows, imports.size() - validRows, errors);
     }
 
@@ -7281,6 +7322,20 @@ public class InMemoryCoaService {
         return bestIndex;
     }
 
+    private StudentColumnSelection selectStudentColumns(List<List<String>> rows) {
+        int headerIndex = findStudentHeaderIndex(rows);
+        Map<String, Integer> columns = resolveStudentColumns(rows.get(headerIndex));
+        if (columns.containsKey("studentNo") && columns.containsKey("studentName")) {
+            return new StudentColumnSelection(columns, headerIndex + 1);
+        }
+
+        StudentColumnSelection inferred = inferStudentColumnsFromData(rows);
+        if (inferred.columns().containsKey("studentNo") && inferred.columns().containsKey("studentName")) {
+            return inferred;
+        }
+        return new StudentColumnSelection(columns, Math.min(headerIndex + 1, rows.size()));
+    }
+
     private int studentHeaderScore(List<List<String>> rows) {
         int best = 0;
         int inspectRows = Math.min(rows.size(), 20);
@@ -7298,19 +7353,144 @@ public class InMemoryCoaService {
         Map<String, Integer> columns = new LinkedHashMap<>();
         for (int index = 0; index < headers.size(); index++) {
             String header = normalizeGradeHeader(headers.get(index));
-            if (!columns.containsKey("studentNo") && (header.contains("学号") || header.contains("学生编号"))) {
+            if (!columns.containsKey("studentNo") && isStudentNoHeader(header)) {
                 columns.put("studentNo", index);
-            } else if (!columns.containsKey("studentName") && (header.contains("姓名") || header.contains("学生姓名"))) {
+            } else if (!columns.containsKey("studentName") && isStudentNameHeader(header)) {
                 columns.put("studentName", index);
             } else if (!columns.containsKey("gender") && header.contains("性别")) {
                 columns.put("gender", index);
-            } else if (!columns.containsKey("phone") && (header.contains("手机") || header.contains("电话"))) {
+            } else if (!columns.containsKey("phone") && (header.contains("手机") || header.contains("电话") || header.contains("联系方式"))) {
                 columns.put("phone", index);
-            } else if (!columns.containsKey("email") && (header.contains("邮箱") || header.contains("email"))) {
+            } else if (!columns.containsKey("email") && (header.contains("邮箱") || header.contains("email") || header.contains("mail"))) {
                 columns.put("email", index);
+            } else if (!columns.containsKey("className") && (header.contains("班级") || header.contains("行政班"))) {
+                columns.put("className", index);
+            } else if (!columns.containsKey("remark") && header.contains("备注")) {
+                columns.put("remark", index);
             }
         }
         return columns;
+    }
+
+    private boolean isStudentNoHeader(String header) {
+        return header.contains("学号")
+            || header.contains("学籍号")
+            || header.contains("学生编号")
+            || header.contains("studentno")
+            || header.contains("studentid")
+            || header.contains("studentnumber");
+    }
+
+    private boolean isStudentNameHeader(String header) {
+        return header.contains("姓名")
+            || header.contains("学生姓名")
+            || "name".equals(header)
+            || header.contains("studentname");
+    }
+
+    private StudentColumnSelection inferStudentColumnsFromData(List<List<String>> rows) {
+        int inspectRows = Math.min(rows.size(), 30);
+        int maxColumns = rows.stream()
+            .limit(inspectRows)
+            .mapToInt(List::size)
+            .max()
+            .orElse(0);
+        Map<String, Integer> bestColumns = new LinkedHashMap<>();
+        int bestScore = -1;
+        int bestStartIndex = 0;
+
+        for (int noIndex = 0; noIndex < maxColumns; noIndex++) {
+            for (int nameIndex = 0; nameIndex < maxColumns; nameIndex++) {
+                if (noIndex == nameIndex) {
+                    continue;
+                }
+                int score = 0;
+                int firstDataIndex = -1;
+                for (int rowIndex = 0; rowIndex < inspectRows; rowIndex++) {
+                    List<String> row = rows.get(rowIndex);
+                    if (row.stream().allMatch(cell -> !StringUtils.hasText(cell))) {
+                        continue;
+                    }
+                    String studentNo = normalizeStudentNo(cellAt(row, noIndex));
+                    String studentName = normalizeStudentText(cellAt(row, nameIndex));
+                    if (looksLikeStudentNo(studentNo) && looksLikeStudentName(studentName)) {
+                        score += 12;
+                        if (firstDataIndex < 0) {
+                            firstDataIndex = rowIndex;
+                        }
+                    } else if (StringUtils.hasText(studentNo) || StringUtils.hasText(studentName)) {
+                        score -= 2;
+                    }
+                }
+                if (firstDataIndex >= 0 && score > bestScore) {
+                    bestScore = score;
+                    bestStartIndex = firstDataIndex;
+                    bestColumns = mapStudentColumns(noIndex, nameIndex);
+                }
+            }
+        }
+
+        return new StudentColumnSelection(bestColumns, bestStartIndex);
+    }
+
+    private Map<String, Integer> mapStudentColumns(int studentNoIndex, int studentNameIndex) {
+        Map<String, Integer> columns = new LinkedHashMap<>();
+        columns.put("studentNo", studentNoIndex);
+        columns.put("studentName", studentNameIndex);
+        return columns;
+    }
+
+    private String normalizeStudentNo(String value) {
+        String text = normalizeStudentText(value)
+            .replace("'", "")
+            .replaceAll("\\s+", "");
+        if (!StringUtils.hasText(text)) {
+            return "";
+        }
+        if ((text.contains(".") || text.toLowerCase(Locale.ROOT).contains("e"))
+            && text.matches("[+-]?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?")) {
+            try {
+                BigDecimal number = new BigDecimal(text).stripTrailingZeros();
+                if (number.scale() <= 0) {
+                    return number.toPlainString();
+                }
+            } catch (NumberFormatException ignored) {
+                return text;
+            }
+        }
+        return text.replaceAll("\\.0+$", "");
+    }
+
+    private String normalizeStudentText(String value) {
+        return defaultString(value, "")
+            .replace("\uFEFF", "")
+            .replace("\u200B", "")
+            .trim();
+    }
+
+    private boolean looksLikeStudentNo(String value) {
+        String text = normalizeStudentNo(value);
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String normalized = normalizeGradeHeader(text);
+        if (isStudentNoHeader(normalized) || isStudentNameHeader(normalized) || normalized.contains("序号")) {
+            return false;
+        }
+        return text.matches("[A-Za-z0-9][A-Za-z0-9_-]{4,29}") && text.matches(".*\\d.*");
+    }
+
+    private boolean looksLikeStudentName(String value) {
+        String text = normalizeStudentText(value);
+        if (!StringUtils.hasText(text) || text.length() > 40) {
+            return false;
+        }
+        String normalized = normalizeGradeHeader(text);
+        if (isStudentNoHeader(normalized) || isStudentNameHeader(normalized)
+            || normalized.contains("班级") || normalized.contains("成绩") || normalized.contains("备注")) {
+            return false;
+        }
+        return !text.matches("[+-]?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?");
     }
 
     private List<List<String>> readWorkbookRows(MultipartFile file, List<Map<String, Object>> assessItems) throws IOException {
@@ -9399,6 +9579,12 @@ public class InMemoryCoaService {
         int validRows,
         int errorRows,
         List<String> errors
+    ) {
+    }
+
+    private record StudentColumnSelection(
+        Map<String, Integer> columns,
+        int dataStartIndex
     ) {
     }
 }
